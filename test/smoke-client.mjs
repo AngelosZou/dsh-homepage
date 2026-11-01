@@ -1472,9 +1472,12 @@ function stubService(service, outcomes) {
   return stub
 }
 
-// One real hit, so the result row has a session the projection can name.
+// One real hit, so the result row has a session the projection can name. The
+// second query matches a subagent Session on purpose: the host search returns
+// it like any other hit, and the list has to drop it itself.
 const SEARCH_HITS = {
   '发布': [{ sessionId: 's-3', snippet: '在 app 里聊发布检查的那一次' }],
+  '子智能体': [{ sessionId: 'm-sub-member', snippet: '一个子智能体的日志' }],
 }
 
 const shippedServices = {
@@ -2874,8 +2877,8 @@ assert.notEqual(searchInput, sbNodes(clearedTree, 'searchInput')[0], 'the field 
 //
 // An archived session is not in the tree at all — no count row, no way in. The
 // shipped browser keeps archived sessions behind its own archive view; inventing
-// an "archived (1)" line (or a "show the rest" row ahead of it) is the extra box
-// the reader asked us to drop. Nothing folds sessions either: the list scrolls.
+// an "archived (1)" line (or a Show more row that reveals it) is the extra box
+// the reader asked us to drop.
 await feedReporter({
   useWorkspaces: (select) => select(Object.assign({}, WORKSPACE_SNAPSHOT, { archivedSessionIds: ['s-4'] })),
   useSessions: (select) => select(SESSION_LIST),
@@ -2883,13 +2886,9 @@ await feedReporter({
 const archivedTree = await settle(region)
 assert.equal(sessionsUnder(archivedTree, 'w-notes').length, 0, 'an archived session is not drawn')
 assert.equal(sbNodes(archivedTree, 'toggleArchived').length, 0, 'nothing offers to reveal the archive')
-assert.equal(
-  elements(archivedTree).filter((node) => node.props && node.props['data-sb'] === 'showMore').length,
-  0,
-  'and nothing folds sessions behind a "show the rest" row',
-)
 const archivedProject = projectByWs(archivedTree, 'w-notes')
 assert.ok(archivedProject, 'the project itself stays, it just has nothing to list')
+assert.equal(sbNodes(archivedProject, 'overflow').length, 0, 'and it carries no Show more row for the archive')
 assert.equal(sbNodes(archivedProject, 'projectToggle').length, 0, 'so it drops the caret with the sessions')
 // Both of this round's changes in one picture: the project whose only session is
 // archived lists nothing and carries no caret, and the group menu now carries the
@@ -3485,6 +3484,262 @@ assert.deepEqual(
   ['s-4'],
   'and the other project\'s only row is an older, sent session',
 )
+
+// ------------------------------------------------------------------ watermark
+//
+// The shipped browser never prints a whole Workspace: an open project draws
+// five Sessions, Show more adds five, and a remainder of five or fewer is
+// revealed in one click before the control turns into Collapse. A subagent and
+// an Agent Teams member are never rows at all — they are children of the
+// Session that started them — so the two can never fill this list. The
+// three-row fixture above cannot reach either rule, hence the one below.
+
+const MANY_SENT_IDS = Array.from({ length: 13 }, (_, index) => 'm-' + (index + 1))
+const manySnapshot = {
+  items: [{
+    workspaceId: 'w-many',
+    path: 'D:\\Many\\deep',
+    title: 'deep',
+    // One subagent is a registered member of the Workspace and one is only
+    // reachable by the cwd fallback, so both projection paths are exercised.
+    sessionIds: ['m-draft', ...MANY_SENT_IDS, 'm-sub-member'],
+    createdAt: 1,
+    updatedAt: 1,
+  }],
+  archivedSessionIds: [],
+  pinnedSessionIds: [],
+  state: 'idle',
+  phase: 'ready',
+  error: null,
+}
+const manySentRows = {}
+for (const [index, id] of MANY_SENT_IDS.entries()) {
+  manySentRows[id] = { title: 'deep ' + (index + 1), updatedAt: SESSION_BASE - index * 60000 }
+}
+const manySessions = {
+  ids: ['m-draft', ...MANY_SENT_IDS, 'm-sub-member', 'm-sub-stray', 'm-stray'],
+  byId: Object.assign({}, manySentRows, {
+    // The Draft is the row the main view holds, so it is drawn — and, as in the
+    // shipped list, it spends none of the five slots.
+    'm-draft': { blank: true, retainedBy: { mainView: 1 }, updatedAt: SESSION_BASE + 5000 },
+    'm-sub-member': { title: 'subagent member', origin: 'subagent', updatedAt: SESSION_BASE - 5400000 },
+    'm-sub-stray': {
+      title: 'subagent stray', origin: 'subagent', cwd: 'D:\\Many\\deep', updatedAt: SESSION_BASE - 5460000,
+    },
+    // An ordinary Session the registry has not assigned yet: the cwd fallback
+    // must still file it under the Workspace, or a Session started a moment ago
+    // would wait for the registry to catch up.
+    'm-stray': { title: 'stray ordinary', cwd: 'D:\\Many\\deep', updatedAt: SESSION_BASE - 5520000 },
+  }),
+}
+surface.sidebar.mutate((live) => Object.assign({}, live, {
+  view: Object.assign({}, live.view, {
+    expanded: Object.assign({}, surface.sidebar.expanded(live), { 'w-many': true }),
+  }),
+}))
+await feedReporter({
+  useWorkspaces: (select) => select(manySnapshot),
+  useSessions: (select) => select(manySessions),
+})
+let manyTree = await settle(region)
+const manyProject = surface.sidebar.snapshot().workspaces.find((project) => project.id === 'w-many')
+assert.ok(manyProject, 'the fixture project must reach the projection')
+assert.deepEqual(
+  manyProject.rows.map((row) => row.id),
+  ['m-draft', ...MANY_SENT_IDS, 'm-stray'],
+  'the projection drops both subagent Sessions, keeps every ordinary one and files the cwd fallback under the Workspace',
+)
+assert.deepEqual(
+  sessionsUnder(manyTree, 'w-many').map((node) => node.props['data-id']),
+  ['m-draft', 'm-1', 'm-2', 'm-3', 'm-4', 'm-5'],
+  'an open project prints five Sessions plus the Draft, in the shipped order',
+)
+assert.equal(sessionRowById(manyTree, 'm-sub-member'), undefined, 'a registered subagent is not a sidebar row')
+assert.equal(sessionRowById(manyTree, 'm-sub-stray'), undefined, 'and neither is the one the cwd fallback found')
+assert.equal(sbNodes(manyTree, 'session').length, 6, 'no other Session row sneaks into the list')
+assert.ok(
+  text(projectByWs(manyTree, 'w-many')).includes(t('sidebar.list.count', { count: 15 })),
+  'the project still counts every row it holds, drawn or not, got: ' + text(projectByWs(manyTree, 'w-many')),
+)
+assert.equal(byClass(manyTree, 'ph-sb-overflow').length, 1, 'a project past five rows carries the shipped Show more control')
+assert.equal(sbNodes(manyTree, 'overflow')[0].props['aria-expanded'], false, 'the control reports the folded remainder')
+assert.ok(
+  text(sbNodes(manyTree, 'overflow')[0]).includes(t('sidebar.list.expand', { count: 9 })),
+  'it names the rows the watermark left out, got: ' + text(sbNodes(manyTree, 'overflow')[0]),
+)
+
+const pressOverflow = (tree) => sbNodes(tree, 'overflow')[0].props.onClick({ stopPropagation() {} })
+pressOverflow(manyTree)
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 11, 'Show more adds five, not the whole tree')
+assert.ok(
+  text(sbNodes(manyTree, 'overflow')[0]).includes(t('sidebar.list.expand', { count: 4 })),
+  'and the control recounts what is still hidden, got: ' + text(sbNodes(manyTree, 'overflow')[0]),
+)
+pressOverflow(manyTree)
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 15, 'a remainder of five or fewer is revealed in one click')
+assert.ok(sessionRowById(manyTree, 'm-stray'), 'so the ordinary cwd-fallback row is drawn too')
+assert.equal(sbNodes(manyTree, 'overflow')[0].props['aria-expanded'], true, 'the control reports the unfolded tree')
+assert.ok(
+  text(sbNodes(manyTree, 'overflow')[0]).includes(t('sidebar.list.collapse')),
+  'and turns into Collapse, got: ' + text(sbNodes(manyTree, 'overflow')[0]),
+)
+
+// A group fold drops the watermarks of every project inside it, exactly as the
+// shipped browser drops the watermarks inside the group it collapses.
+surface.sidebar.mutate((live) => Object.assign({}, live, {
+  members: Object.assign({}, live.members, {
+    'w-many': { group: 'lab', order: 9, color: null, hidden: false, alias: null, pinned: false },
+  }),
+}))
+manyTree = await settle(region)
+sbNodes(sectionByKey(manyTree, 'lab'), 'groupToggle')[0].props.onClick({ stopPropagation() {} })
+const foldedGroup = await settle(region)
+assert.equal(sessionsUnder(foldedGroup, 'w-many').length, 0, 'folding the group hides its projects')
+sbNodes(sectionByKey(foldedGroup, 'lab'), 'groupToggle')[0].props.onClick({ stopPropagation() {} })
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 6, 'unfolding the group starts its projects at five again')
+
+// The watermark is region state, not a property of the document: folding the
+// project forgets it too, so reopening cannot leave a project permanently
+// expanded.
+pressOverflow(manyTree)
+manyTree = await settle(region)
+pressOverflow(manyTree)
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 15, 'the two clicks reveal the whole project')
+sbNodes(projectByWs(manyTree, 'w-many'), 'projectToggle')[0].props.onClick({ stopPropagation() {} })
+let foldedMany = await settle(region)
+assert.equal(sessionsUnder(foldedMany, 'w-many').length, 0, 'the caret still folds the project')
+sbNodes(projectByWs(foldedMany, 'w-many'), 'projectToggle')[0].props.onClick({ stopPropagation() {} })
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 6, 'reopening starts at five again, not where Show more left it')
+assert.ok(
+  text(sbNodes(manyTree, 'overflow')[0]).includes(t('sidebar.list.expand', { count: 9 })),
+  'and the control is back to the full remainder',
+)
+
+// Collapse reveals the other half of the contract: once everything is drawn the
+// same control folds the project back to five.
+pressOverflow(manyTree)
+manyTree = await settle(region)
+pressOverflow(manyTree)
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 15, 'the two clicks reveal the whole project')
+pressOverflow(manyTree)
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 6, 'Collapse puts the project back to five')
+assert.equal(sbNodes(manyTree, 'overflow')[0].props['aria-expanded'], false, 'and reports itself folded again')
+
+// A row the reader must not lose raises the watermark on its own: a running
+// Session past the fifth stay drawn, as it does in the shipped browser.
+const runningRows = Object.assign({}, manySessions.byId, {
+  'm-9': Object.assign({}, manySessions.byId['m-9'], { running: true }),
+})
+await feedReporter({
+  useWorkspaces: (select) => select(manySnapshot),
+  useSessions: (select) => select(Object.assign({}, manySessions, { byId: runningRows })),
+})
+manyTree = await settle(region)
+assert.equal(
+  sessionsUnder(manyTree, 'w-many').length,
+  10,
+  'a running row past five raises the watermark so it stays drawn',
+)
+assert.ok(sessionRowById(manyTree, 'm-9'), 'the ninth row is the running one, so the raise is not a coincidence')
+
+// The other attention classes raise it too: an approval waiting for the
+// reader, an unread completion, and a running child (whose own row is hidden,
+// so the parent is the only place that activity could show).
+const attentionRow = (patch) => new Map([
+  ['m-9', Object.assign({ running: false, pendingInteraction: undefined, completionUnread: false }, patch)],
+])
+await feedReporter({
+  useWorkspaces: (select) => select(manySnapshot),
+  useSessions: (select) => select(manySessions),
+  useSessionStatus: (select) => select(attentionRow({
+    pendingInteraction: { key: 'ask', kind: 'approval', sessionId: 'm-9' },
+  })),
+})
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 10, 'a pending approval past five raises the watermark')
+assert.ok(sessionRowById(manyTree, 'm-9'), 'the row waiting for the reader is drawn')
+
+await feedReporter({
+  useWorkspaces: (select) => select(manySnapshot),
+  useSessions: (select) => select(manySessions),
+  useSessionStatus: (select) => select(attentionRow({ completionUnread: true })),
+})
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 10, 'an unread completion past five raises the watermark')
+assert.ok(sessionRowById(manyTree, 'm-9'), 'and its row is drawn')
+
+const childSessions = Object.assign({}, manySessions, {
+  byId: Object.assign({}, manySessions.byId, {
+    'm-child': { title: 'teammate', origin: 'subagent', running: true, updatedAt: SESSION_BASE },
+  }),
+  projectionsBySession: { 'm-9': { values: { subagentCatalog: [{ id: 'm-child', label: 'teammate' }] } } },
+})
+await feedReporter({
+  useWorkspaces: (select) => select(manySnapshot),
+  useSessions: (select) => select(childSessions),
+})
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 10, 'a running child past five raises its parent into view')
+assert.equal(sessionRowById(manyTree, 'm-child'), undefined, 'while the child itself is never a row')
+
+// A baseline that already reaches the last row draws no control: there is
+// nothing left to reveal, and pressing Collapse could not fold anything.
+const nineSnapshot = Object.assign({}, manySnapshot, {
+  items: [Object.assign({}, manySnapshot.items[0], {
+    sessionIds: ['m-draft', ...MANY_SENT_IDS.slice(0, 9)],
+  })],
+})
+await feedReporter({
+  useWorkspaces: (select) => select(nineSnapshot),
+  useSessions: (select) => select(Object.assign({}, manySessions, {
+    // The ordinary cwd fallback would be a tenth row here; this case is about
+    // the baseline itself, so the fixture leaves it out of the list.
+    ids: ['m-draft', ...MANY_SENT_IDS.slice(0, 9)],
+    byId: runningRows,
+  })),
+})
+manyTree = await settle(region)
+assert.equal(sessionsUnder(manyTree, 'w-many').length, 10, 'the raised baseline draws nine Sessions plus the Draft')
+assert.equal(sbNodes(manyTree, 'overflow').length, 0, 'and no control, because the baseline already reaches the last row')
+
+// The current Session is the other row that raises it: the reader's own row is
+// never hidden behind Show more.
+const currentRows = Object.assign({}, manySessions.byId, {
+  'm-draft': { blank: true, updatedAt: SESSION_BASE + 5000 },
+  'm-9': Object.assign({}, manySessions.byId['m-9'], { retainedBy: { mainView: 1 } }),
+})
+await feedReporter({
+  useWorkspaces: (select) => select(manySnapshot),
+  useSessions: (select) => select(Object.assign({}, manySessions, { byId: currentRows })),
+})
+manyTree = await settle(region)
+assert.equal(
+  sessionsUnder(manyTree, 'w-many').length,
+  9,
+  'the current Session is drawn even when it sits past the fifth',
+)
+assert.ok(sessionRowById(manyTree, 'm-9'), 'and it is the row the main view now holds')
+assert.equal(sessionRowById(manyTree, 'm-draft'), undefined, 'while the Draft it left behind is not drawn at all')
+
+// A content search reaches Sessions directly, not through the project rows, so
+// the origin filter has to hold there too: the host returns the subagent hit,
+// and the list drops it instead of drawing a row nobody opened.
+sbNodes(manyTree, 'searchInput')[0].props.onChange({ target: { value: '子智能体' } })
+await sleep(260)
+manyTree = await settle(region)
+assert.equal(sbNodes(manyTree, 'result').length, 0, 'a content hit on a subagent Session is not drawn')
+assert.equal(sbNodes(manyTree, 'noMatch').length, 1, 'the filtered hit leaves the same empty state as no hit at all')
+sbNodes(manyTree, 'clearSearch')[0].props.onClick({})
+manyTree = await settle(region)
+assert.equal(sbNodes(manyTree, 'result').length, 0, 'clearing the field takes the hit rows away')
+assert.ok(sbNodes(manyTree, 'project').length > 0, 'and the grouped tree comes back')
 
 // Leave the document and the projection the way this section found them: the
 // blocks after it read both.
