@@ -1,0 +1,95 @@
+/*
+ * Preview-only theme tokens.
+ *
+ * The panel never ships its own palette: it reads the host's --dsw-* variables
+ * and falls back to the literals in the framework sheet. This file stands in for
+ * the host so a dumped tree can be rendered in a browser and judged by eye.
+ * Light is the default; PH_PREVIEW_THEME=dark flips the attribute.
+ */
+
+:root[data-theme='light'] {
+  --dsw-font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, 'Microsoft YaHei UI', sans-serif;
+  --dsw-font-family-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --dsw-alias-bg-base: #ffffff;
+  --dsw-alias-bg-layer-1: #ffffff;
+  --dsw-alias-bg-layer-2: #f3f4f7;
+  --dsw-alias-bg-overlay: #ffffff;
+  --dsw-alias-label-primary: #15181d;
+  --dsw-alias-label-secondary: #6c7480;
+  --dsw-alias-border-l1: rgba(18, 22, 28, 0.07);
+  --dsw-alias-border-l2: rgba(18, 22, 28, 0.13);
+  --dsw-alias-brand-primary: #4d6bfe;
+  --dsw-alias-state-success-primary: #17a34a;
+  --dsw-alias-state-warning-primary: #d98207;
+  --dsw-alias-state-danger-primary: #dc2626;
+
+  --dsw-elevation-panel: 0 1px 2px rgba(16, 24, 40, 0.06), 0 12px 32px -12px rgba(16, 24, 40, 0.18);
+  --dsw-elevation-prominent: 0 2px 6px rgba(16, 24, 40, 0.08), 0 24px 52px -18px rgba(16, 24, 40, 0.26);
+  --dsw-menu-surface-fill: rgba(255, 255, 255, 0.88);
+  --dsw-menu-backdrop-filter: blur(22px) saturate(180%);
+}
+
+:root[data-theme='dark'] {
+  --dsw-font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, 'Microsoft YaHei UI', sans-serif;
+  --dsw-font-family-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --dsw-alias-bg-base: #0f1115;
+  --dsw-alias-bg-layer-1: #17191e;
+  --dsw-alias-bg-layer-2: #1e2126;
+  --dsw-alias-bg-overlay: #1c1f26;
+  --dsw-alias-label-primary: #e6e8ea;
+  --dsw-alias-label-secondary: #9aa4b2;
+  --dsw-alias-border-l1: rgba(255, 255, 255, 0.08);
+  --dsw-alias-border-l2: rgba(255, 255, 255, 0.15);
+  --dsw-alias-brand-primary: #7fa2ff;
+  --dsw-alias-state-success-primary: #3fb950;
+  --dsw-alias-state-warning-primary: #d29922;
+  --dsw-alias-state-danger-primary: #f85149;
+
+  --dsw-elevation-panel: 0 0.5px 0 rgba(255, 255, 255, 0.14), 0 14px 34px -10px rgba(0, 0, 0, 0.5);
+  --dsw-elevation-prominent: 0 1px 0 rgba(255, 255, 255, 0.16), 0 26px 60px -14px rgba(0, 0, 0, 0.62);
+  --dsw-menu-surface-fill: rgba(28, 31, 38, 0.9);
+  --dsw-menu-backdrop-filter: blur(22px) saturate(160%);
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--dsw-alias-bg-base, #ffffff);
+  color: var(--dsw-alias-label-primary, #15181d);
+  font-family: var(--dsw-font-family);
+}
+
+.pv-page {
+  min-height: 100vh;
+  padding: 0;
+  background: var(--dsw-alias-bg-base, #ffffff);
+}
+
+/* The app shell around the page body: the panel is a page, not a floating card. */
+.pv-chrome {
+  width: 1600px;
+  height: 900px;
+  margin: 0 auto;
+  padding: 0;
+  background: var(--dsw-alias-bg-base, #ffffff);
+  overflow: hidden;
+}
+
+/* The slot the shell hands the region: a column of definite height, which is
+   what the real host is (the official browser's own root is `flex:1;min-height:0`
+   inside it). A plain block here would let the region grow to its content and the
+   list would look unscrollable in every dump — the preview would then disagree
+   with the live sidebar about the one thing this host models. */
+.pv-host {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}

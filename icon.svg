@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Personal Home">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b5cff"/>
+      <stop offset="1" stop-color="#7a3cff"/>
+    </linearGradient>
+    <linearGradient id="hot" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d8e2ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3" width="58" height="58" rx="15" fill="url(#bg)"/>
+  <g fill="#ffffff" opacity="0.92">
+    <rect x="13" y="13" width="16" height="21" rx="4"/>
+    <rect x="35" y="13" width="16" height="10" rx="4"/>
+    <rect x="35" y="28" width="16" height="23" rx="4"/>
+    <rect x="13" y="39" width="16" height="12" rx="4"/>
+  </g>
+  <rect x="13" y="13" width="16" height="21" rx="4" fill="url(#hot)"/>
+  <circle cx="45" cy="18" r="2.6" fill="#ff5f6d"/>
+</svg>

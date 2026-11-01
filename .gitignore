@@ -1,0 +1,31 @@
+# Headless-browser profiles left by local preview runs.
+.tmp-edge*/
+.edge-profile/
+
+# Static HTML/PNG dumps written by test/smoke-client.mjs under PH_PREVIEW.
+preview/
+
+# Crops and renders the image-inspection tools drop while checking those dumps.
+.dsh-code-drawer/
+
+# Agent worktrees and the screenshots taken while reviewing a card.
+.agents/
+
+node_modules/
+
+# Optional card packages live in their own repositories. Anchored: only the
+# repository-root directory is ignored, so a nested path with this name is
+# never silently untracked.
+/external-cards/
+
+.graphlint/
+
+# Local environment and tool output.
+.env*
+*.log
+.DS_Store
+Thumbs.db
+coverage/
+dist/
+*.tgz
+.idea
