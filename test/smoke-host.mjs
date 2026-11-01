@@ -294,9 +294,12 @@ if (device.disk) {
 // invariants are asserted and its figures are not: a box without a counter
 // reports a reason, and one with a counter reports ratios like every other
 // reading. Video memory is allowed to be unknown while the load still reads.
+// An adapter that is named but publishes no counter — macOS, Intel — is an
+// answer with a hole in it, not a missing source, so it may carry no reason.
 assert(device.gpu && typeof device.gpu === 'object', 'the sample carries a GPU block')
 if (device.gpu.usage === null) {
-  assert(typeof device.gpu.reason === 'string', 'a missing GPU reading explains itself')
+  assert(typeof device.gpu.reason === 'string' || device.gpu.name !== '',
+    'a missing GPU reading explains itself or names the card it could not read')
 } else {
   assert(device.gpu.usage >= 0 && device.gpu.usage <= 1, 'gpu usage is a ratio')
 }

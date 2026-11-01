@@ -8,9 +8,9 @@
  * Run: node test/device-sampler.mjs
  */
 import assert from 'node:assert/strict'
-import { cpuUsage, gpuUsageByLuid, parseGpuEngineName, parseGpuJson, parseQwMemorySize,
-  parseSensorJson, parseThermalKelvinTenths, resetDeviceCache, sampleDevice,
-  startDeviceSampler } from '../lib/host/device.js'
+import { cpuUsage, gpuUsageByLuid, parseGpuEngineName, parseGpuJson, parseNvidiaCsv,
+  parseQwMemorySize, parseSensorJson, parseThermalKelvinTenths, resetDeviceCache,
+  sampleDevice, startDeviceSampler } from '../lib/host/device.js'
 
 /** Milliseconds fixture used by every section, mirroring the module's own window. */
 const STEP_MS = 5000
@@ -795,10 +795,168 @@ function gpuOptions(overrides = {}) {
   assert.equal(noTree.gpu.reason, 'unsupported', 'a machine without sysfs is unsupported')
 
   resetDeviceCache()
-  const mac = await sampleDevice({ ...linuxBase, platform: 'darwin' })
-  assert.equal(mac.gpu.reason, 'unsupported', 'darwin is unsupported here')
-  assert.equal(mac.gpu.memory.total, null, 'and reports no memory')
-  console.log('  gpu: linux sysfs load/VRAM, missing tree and darwin all degrade cleanly')
+  const mac = await sampleDevice({
+    ...linuxBase,
+    platform: 'darwin',
+    runCommand: async (command, args) => {
+      assert.equal(command, 'system_profiler', 'macOS is asked through its own profiler')
+      assert.deepEqual(args, ['SPDisplaysDataType', '-json'], 'in its JSON mode')
+      return {
+        ok: true,
+        stderr: '',
+        stdout: JSON.stringify({
+          SPDisplaysDataType: [
+            { _name: 'Apple M2 Pro', sppci_model: 'Apple M2 Pro', spdisplays_vram: '16 GB' },
+          ],
+        }),
+      }
+    },
+  })
+  assert.equal(mac.gpu.name, 'Apple M2 Pro', 'the profiler names the adapter')
+  assert.equal(mac.gpu.usage, null, 'macOS publishes no utilization a normal user may read')
+  assert.equal(mac.gpu.memory.total, 16 * 1024 ** 3, 'the VRAM string becomes a byte count')
+  assert.equal(mac.gpu.memory.used, null, 'and there is no used figure to pair it with')
+  assert.equal(mac.gpu.memory.usage, null, 'so no pressure is invented')
+  assert.equal(mac.gpu.reason, null, 'a named adapter is an answer, not a missing source')
+
+  resetDeviceCache()
+  const headless = await sampleDevice({
+    ...linuxBase,
+    platform: 'darwin',
+    runCommand: async () => ({ ok: true, stderr: '', stdout: '{"SPDisplaysDataType":[]}' }),
+  })
+  assert.equal(headless.gpu.reason, 'noCounters', 'a profiler with no adapter is noCounters')
+  assert.equal(headless.gpu.name, '', 'and names nothing')
+  console.log('  gpu: linux sysfs load/VRAM, missing tree, darwin profiler and headless mac')
+}
+
+// --------------------------------------------------------------- gpu nvidia
+
+{
+  const base = {
+    os: fakeOs({}),
+    now: fakeClock(1792000000000),
+    readdir: async (path) => (path === '/sys/class/drm' ? ['card0'] : []),
+    readFile: async (path) => {
+      if (path === '/proc/driver/nvidia/version') return 'NVRM version: 570.86.16\n'
+      throw new Error('ENOENT')
+    },
+    sleep: async () => {},
+    platform: 'linux',
+    temperature: false,
+  }
+  let spawned = 0
+  const csv = [
+    'NVIDIA GeForce RTX 5070, 23, 2160, 16376',
+    'NVIDIA GeForce RTX 3060, 4, 512, 12288',
+  ].join('\n')
+
+  resetDeviceCache()
+  const sample = await sampleDevice({
+    ...base,
+    runCommand: async (command, args) => {
+      spawned += 1
+      assert.equal(command, 'nvidia-smi', 'a driver with no sysfs counter is read by its tool')
+      assert.ok(args[0].indexOf('--query-gpu=') === 0, 'the query lists fields, not a table')
+      assert.equal(args[1], '--format=csv,noheader,nounits', 'CSV without units parses without widths')
+      return { ok: true, stdout: csv, stderr: '' }
+    },
+  })
+  assert.equal(spawned, 1, 'one spawn answers the whole block')
+  assert.equal(sample.gpu.name, 'NVIDIA GeForce RTX 5070', 'the name comes with the query')
+  assert.equal(sample.gpu.vendor, 'nvidia', 'the vendor is named')
+  assert.equal(sample.gpu.usage, 0.23, 'utilization arrives as a 0..100 integer')
+  assert.equal(sample.gpu.memory.used, 2160 * 1024 * 1024, 'MiB becomes bytes')
+  assert.equal(sample.gpu.memory.total, 16376 * 1024 * 1024, 'and so does the total')
+  assert.equal(sample.gpu.reason, null, 'a card that answered is a reading')
+
+  // The gate is a file, not a guess: without the driver the tool is not spawned.
+  resetDeviceCache()
+  spawned = 0
+  const noDriver = await sampleDevice({
+    ...base,
+    readFile: async () => { throw new Error('ENOENT') },
+    runCommand: async () => { spawned += 1; throw new Error('nvidia-smi must not run') },
+  })
+  assert.equal(spawned, 0, 'a machine without /proc/driver/nvidia never spawns the tool')
+  assert.equal(noDriver.gpu.reason, 'unsupported', 'and reports that the platform has no counters')
+
+  // A driver present but a PATH that cannot see the binary is the shape of the
+  // machine, not a defect, so ENOENT from the spawn is `unsupported`.
+  resetDeviceCache()
+  const missing = await sampleDevice({
+    ...base,
+    runCommand: async () => ({ ok: false, stdout: '', stderr: 'Error: spawn nvidia-smi ENOENT' }),
+  })
+  assert.equal(missing.gpu.reason, 'unsupported', 'a missing binary is not an error')
+
+  resetDeviceCache()
+  const refused = await sampleDevice({
+    ...base,
+    runCommand: async () => ({ ok: false, stdout: '', stderr: 'Access is denied.' }),
+  })
+  assert.equal(refused.gpu.reason, 'permission', 'a refused query keeps the permission reason')
+
+  assert.deepEqual(parseNvidiaCsv('[N/A], [N/A], [N/A], [N/A]'), [],
+    'a row with no real size cannot become a VRAM reading')
+  assert.equal(parseNvidiaCsv('').length, 0, 'empty output is no rows')
+  console.log('  gpu: nvidia-smi CSV, byte conversion, the /proc gate and its failure codes')
+}
+
+// ------------------------------------------------------- temperature hwmon
+
+{
+  const files = {
+    '/sys/class/hwmon/hwmon1/name': 'acpitz\n',
+    '/sys/class/hwmon/hwmon1/temp1_input': '27800\n',
+    '/sys/class/hwmon/hwmon3/name': 'k10temp\n',
+    '/sys/class/hwmon/hwmon3/temp1_input': '45000\n',
+    '/sys/class/hwmon/hwmon3/temp3_input': '52000\n',
+    '/sys/class/thermal/thermal_zone0/temp': '27800\n',
+  }
+  const base = {
+    os: fakeOs({}),
+    now: fakeClock(1792000000000),
+    readdir: async (path) => {
+      if (path === '/sys/class/hwmon') return ['hwmon1', 'hwmon3']
+      if (path === '/sys/class/thermal') return ['thermal_zone0']
+      return []
+    },
+    readFile: async (path) => {
+      if (path in files) return files[path]
+      throw new Error('ENOENT')
+    },
+    runCommand: async () => { throw new Error('linux must not spawn a temperature probe') },
+    sleep: async () => {},
+    platform: 'linux',
+    gpu: false,
+  }
+
+  resetDeviceCache()
+  const sample = await sampleDevice(base)
+  assert.equal(sample.temperature.celsius, 52, 'the CPU chip wins over the ACPI zone')
+  assert.equal(sample.temperature.source, 'hwmon', 'and the source says which tree answered')
+  assert.equal(sample.temperature.reason, null, 'a real reading carries no reason')
+
+  // A board sensor is not a CPU package: with no known chip the ACPI zone is
+  // still better than nothing, so the reading falls back instead of losing the
+  // temperature entirely.
+  resetDeviceCache()
+  const fallback = await sampleDevice({
+    ...base,
+    readdir: async (path) => {
+      if (path === '/sys/class/hwmon') return ['hwmon1']
+      if (path === '/sys/class/thermal') return ['thermal_zone0']
+      return []
+    },
+  })
+  assert.equal(fallback.temperature.celsius, 27.8, 'with no CPU chip the ACPI zone answers')
+  assert.equal(fallback.temperature.source, 'thermal_zone', 'and is named as the fallback')
+
+  resetDeviceCache()
+  const none = await sampleDevice({ ...base, readdir: async () => [] })
+  assert.equal(none.temperature.reason, 'unsupported', 'no tree at all is unsupported')
+  console.log('  temperature: hwmon chip preference, ACPI fallback and an empty tree')
 }
 
 // ------------------------------------------------------------------ gpu cost
