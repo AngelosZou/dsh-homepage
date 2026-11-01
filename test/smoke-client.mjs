@@ -463,9 +463,12 @@ for (const name of CARD_FILES) {
 }
 
 {
+  // The artifact this test compares against is canonical LF, so a CRLF checkout
+  // must normalize before it can call the file stale.
+  const committed = source.replace(/\r\n/g, '\n')
   const rebuilt = compose(readSources())
-  if (rebuilt !== source) {
-    const a = source.split('\n')
+  if (rebuilt !== committed) {
+    const a = committed.split('\n')
     const b = rebuilt.split('\n')
     let line = 0
     while (line < Math.max(a.length, b.length) && a[line] === b[line]) line += 1

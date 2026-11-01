@@ -87,10 +87,22 @@ export function compose({ framework, cards }) {
   return banner + framework.replace(MARKER, () => spliced.trimEnd())
 }
 
+/**
+ * Read one source in canonical form. A CRLF checkout must compose the same
+ * artifact as an LF one: `stripHeader` ends on `*\/\n`, so a stray `\r` keeps
+ * a card's module doc comment in the bundle (or drops it on a fresh clone),
+ * and the two checkouts then disagree with `--check` for no visible reason.
+ * @param path - the file to read.
+ * @returns its text with LF line endings.
+ */
+function canonicalSource(path) {
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+}
+
 /** @returns `{ artifact, framework, cards }` read from disk. */
 export function readSources() {
-  const framework = readFileSync(frameworkPath, 'utf8')
-  const cards = cardFiles().map((name) => [name, readFileSync(join(cardsDir, name), 'utf8')])
+  const framework = canonicalSource(frameworkPath)
+  const cards = cardFiles().map((name) => [name, canonicalSource(join(cardsDir, name))])
   return { framework, cards }
 }
 
@@ -99,7 +111,9 @@ if (invokedDirectly) {
   const { framework, cards } = readSources()
   const artifact = compose({ framework, cards })
   if (process.argv.includes('--check')) {
-    const current = existsSync(outPath) ? readFileSync(outPath, 'utf8') : ''
+    // Compare canonically: a CRLF checkout is still up to date, because the
+    // artifact this script writes is LF regardless of the checkout's endings.
+    const current = existsSync(outPath) ? readFileSync(outPath, 'utf8').replace(/\r\n/g, '\n') : ''
     if (current !== artifact) {
       const a = current.split('\n')
       const b = artifact.split('\n')
