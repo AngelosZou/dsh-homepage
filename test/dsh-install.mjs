@@ -669,7 +669,9 @@ function posixEnv(extra = {}) {
   assert.equal(written.length, 2, 'the root is made and the script is written')
   assert.deepEqual(written[0], { path: plan.root, kind: 'mkdir' }, 'the root is created recursively')
   assert.equal(written[1].path, plan.scriptPath, 'the script goes where the plan said')
-  assert.equal(written[1].data, plan.script, 'the file is exactly the planned script')
+  assert.equal(written[1].data.charCodeAt(0), 0xfeff,
+    'the win32 script opens with a BOM, without which PowerShell 5.1 decodes it as ANSI')
+  assert.equal(written[1].data, '\uFEFF' + plan.script, 'the file is the planned script, BOM included')
 
   assert.equal(calls.length, 1, 'exactly one process was spawned')
   assert.equal(calls[0].command, 'wt.exe', 'Windows Terminal opens the window')
@@ -740,6 +742,7 @@ function posixEnv(extra = {}) {
   resetInstallCache()
   const root = join(process.cwd(), '.dsh-install-test', 'cores')
   const calls = []
+  const written = []
   const result = await startInstall({
     root,
     version: 'v1',
@@ -748,12 +751,16 @@ function posixEnv(extra = {}) {
     exists: () => true,
     readdirSync: () => [],
     mkdir: async () => {},
-    writeFile: async () => {},
+    writeFile: async (path, data) => { written.push({ path: path, data: data }) },
     spawn: fakeSpawn(calls, 11),
   })
   assert.equal(result.command, 'x-terminal-emulator', 'the first POSIX terminal that exists wins')
   assert.deepEqual(calls[0].args, ['-e', 'sh', result.scriptPath], 'each terminal gets its own -e/-- spelling')
   assert.equal(result.scriptPath.endsWith('.sh'), true, 'a POSIX plan writes a .sh script')
+  assert.equal(written.length, 1, 'only the script is written for a POSIX plan')
+  assert.equal(written[0].path, result.scriptPath, 'the script goes where the plan said')
+  assert.equal(written[0].data.charCodeAt(0) === 0xfeff, false, 'a .sh script never carries a BOM')
+  assert.equal(written[0].data.split('\n')[0], '#!/bin/sh', 'and it opens with the sh shebang')
   console.log('  startInstall: POSIX opens the terminal with the flag that terminal uses')
 }
 

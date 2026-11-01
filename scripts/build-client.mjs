@@ -36,6 +36,21 @@ export function cardFiles(dir = cardsDir) {
     .sort()
 }
 
+/**
+ * Normalize CRLF to LF.
+ *
+ * `.gitattributes` checks every text file out with `eol=lf`, but a worktree that
+ * predates the attribute (or an editor that saved CRLF) must not change what
+ * this script produces: the same commit has to build the same bytes on every
+ * machine, or `--check` fails for reasons that have nothing to do with the code.
+ *
+ * @param text - a source file's text, with either line ending.
+ * @returns the text with LF endings only.
+ */
+export function normalizeEol(text) {
+  return String(text).replace(/\r\n/g, '\n')
+}
+
 /** Indent every non-empty line of a block by two spaces. */
 function indent(text) {
   return text
@@ -44,9 +59,14 @@ function indent(text) {
     .join('\n')
 }
 
-/** @returns the card body without its module doc comment (already in the banner). */
+/**
+ * @param source - one card's source text, already normalized to LF.
+ * @returns the card body without its module doc comment (already in the banner).
+ */
 function stripHeader(source) {
-  return source.replace(/^\/\*\*[\s\S]*?\*\/\n/, '')
+  // `\r?\n` as well as normalization, so a caller that hands over CRLF source
+  // directly still gets its header removed instead of shipping it twice.
+  return source.replace(/^\/\*\*[\s\S]*?\*\/\r?\n/, '')
 }
 
 /**
@@ -55,16 +75,19 @@ function stripHeader(source) {
  * @returns the artifact text.
  */
 export function compose({ framework, cards }) {
-  const count = framework.split(MARKER).length - 1
+  // Normalized once, here, so the artifact is a function of the committed text
+  // and not of the line endings the worktree happens to hold.
+  const source = normalizeEol(framework)
+  const count = source.split(MARKER).length - 1
   if (count !== 1) throw new Error('framework.part.js must contain exactly one ' + MARKER + ' marker, found ' + count)
   if (cards.length === 0) throw new Error('no card sources found in ' + cardsDir)
 
   const spliced = cards
-    .map(([name, source]) => {
+    .map(([name, cardSource]) => {
       const id = name.replace(/\.js$/, '')
       const banner = '    // ' + '-'.repeat(Math.max(4, 66 - id.length)) + ' ' + id + '\n'
         + '    // lib/cards/' + name + '\n'
-      return banner + '    ;(function (kit) {\n' + indent(stripHeader(source)) + '    })(Kit)\n'
+      return banner + '    ;(function (kit) {\n' + indent(stripHeader(normalizeEol(cardSource))) + '    })(Kit)\n'
     })
     .join('\n')
 
@@ -73,8 +96,9 @@ export function compose({ framework, cards }) {
     + ' *\n'
     + ' * Built by scripts/build-client.mjs from lib/framework.part.js plus every\n'
     + ' * module in lib/cards/ (one file per card, spliced in filename order). Run\n'
-    + ' * `npm run build` after changing either, and `npm test` before shipping: it\n'
-    + ' * fails while this file is out of date.\n'
+    + ' * `npm run build` after changing either, and `npm run check:build` before\n'
+    + ' * shipping: it fails while this file is out of date. Line endings are\n'
+    + ' * normalized on both sides, so a CRLF worktree cannot stale this file.\n'
     + ' *\n'
     + ' * The card sources are the finished text of each module, so read those for\n'
     + ' * anything below the framework: lib/cards/' + cards.map(([name]) => name).join(', lib/cards/') + '\n'
@@ -84,7 +108,7 @@ export function compose({ framework, cards }) {
   // (a RegExp escape, for example), and String.replace would expand it into the
   // marker itself — a corruption that still parses, so only a diff or a
   // composition test catches it.
-  return banner + framework.replace(MARKER, () => spliced.trimEnd())
+  return banner + source.replace(MARKER, () => spliced.trimEnd())
 }
 
 /** @returns `{ artifact, framework, cards }` read from disk. */
@@ -100,9 +124,12 @@ if (invokedDirectly) {
   const artifact = compose({ framework, cards })
   if (process.argv.includes('--check')) {
     const current = existsSync(outPath) ? readFileSync(outPath, 'utf8') : ''
-    if (current !== artifact) {
-      const a = current.split('\n')
-      const b = artifact.split('\n')
+    // Compare with line endings normalized: a CRLF checkout of a committed LF
+    // artifact is not a stale artifact, and failing on it would report a
+    // platform difference as a build defect.
+    if (normalizeEol(current) !== normalizeEol(artifact)) {
+      const a = normalizeEol(current).split('\n')
+      const b = normalizeEol(artifact).split('\n')
       let line = 0
       while (line < Math.max(a.length, b.length) && a[line] === b[line]) line += 1
       console.error('lib/client.js is out of date with lib/framework.part.js + lib/cards/.')
