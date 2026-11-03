@@ -1484,7 +1484,17 @@ const shippedServices = {
   workspaces: stubService('workspaces', {
     rename: () => null,
     delete: () => null,
-    create: () => null,
+    // The Host answers a registration with the workspace it made — the same
+    // `WorkspaceView` the real service returns: an id, a title, the path, and
+    // the instants the list orders by.
+    create: (input) => ({
+      workspaceId: 'w-fresh',
+      path: input && input.path,
+      title: 'Picked Folder',
+      sessionIds: [],
+      createdAt: new Date(SESSION_BASE).toISOString(),
+      updatedAt: new Date(SESSION_BASE).toISOString(),
+    }),
   }),
   sessions: stubService('sessions', {
     fork: () => null,
@@ -2558,6 +2568,107 @@ assert.deepEqual(
   'and the picked path becomes a workspace',
 )
 
+// A project added from a group's own control belongs to that group, and it
+// arrives complete: making the workspace but leaving it in the ungrouped bucket
+// — or in the list as a bare workspace id — is what "the new workspace never
+// showed up under that category, under its own name" looked like from the
+// reader's side.
+await sleep(520)
+const filedMember = surface.sidebar.members(surface.sidebar.snapshot().layout)['w-fresh']
+assert.equal(filedMember && filedMember.group, 'lab', 'a project added from 实验室 is filed into 实验室')
+const freshRow = sbNodes(sbNodes(await settle(region), 'section')[0], 'project')
+  .find((node) => node.props['data-ws'] === 'w-fresh')
+assert.ok(freshRow, 'and the new project is drawn under that heading')
+assert.ok(text(freshRow).includes('Picked Folder'), 'under the name the Host gave it, got: ' + text(freshRow))
+assert.ok(
+  !text(freshRow).includes('w-fresh'),
+  'never under the workspace id its own document record would fall back to',
+)
+assert.ok(!hasClass(freshRow, 'is-orphan'), 'and not marked as a stale assignment it is not')
+const filedSaves = calls.filter((call) => call.endpoint === 'homepage/saveSidebarLayout')
+assert.equal(
+  surface.sidebar.members(filedSaves[filedSaves.length - 1].payload.args.layout)['w-fresh'].group,
+  'lab',
+  'the filing is persisted with the rest of the document',
+)
+
+// Recency counts the creation instant: a workspace with no Sessions is not an
+// old project. It was just registered, so a section ordered by recency puts it
+// first instead of at the bottom behind everything that ever ran.
+surface.sidebar.mutate((live) => Object.assign({}, live, {
+  groups: live.groups.map((group) => (group && group.id === 'lab'
+    ? Object.assign({}, group, { sort: 'recent', collapsed: false })
+    : group)),
+}))
+const recentOrder = sbNodes(sbNodes(await settle(region), 'section')[0], 'project')
+  .map((node) => node.props['data-ws'])
+assert.equal(
+  recentOrder[0],
+  'w-fresh',
+  'the newest workspace leads a section ordered by recency, got: ' + recentOrder.join(','),
+)
+
+// …and it keeps that place once the Host's projection arrives, because the
+// creation instant travels with the workspace itself rather than living in this
+// region's memory.
+const withFresh = Object.assign({}, WORKSPACE_SNAPSHOT, {
+  items: WORKSPACE_SNAPSHOT.items.concat([{
+    workspaceId: 'w-fresh',
+    path: 'D:/Picked/fresh',
+    title: 'Picked Folder',
+    sessionIds: [],
+    createdAt: SESSION_BASE,
+    updatedAt: SESSION_BASE,
+  }]),
+})
+await feedReporter({
+  useWorkspaces: (select) => select(withFresh),
+  useSessions: (select) => select(SESSION_LIST),
+})
+const projectedOrder = sbNodes(sbNodes(await settle(region), 'section')[0], 'project')
+  .map((node) => node.props['data-ws'])
+assert.equal(
+  projectedOrder[0],
+  'w-fresh',
+  'the projection carries the creation instant too, got: ' + projectedOrder.join(','),
+)
+
+// Put the projection, the sort and the member record back: the blocks below
+// read them as the fixture wrote them.
+await feedReporter({
+  useWorkspaces: (select) => select(WORKSPACE_SNAPSHOT),
+  useSessions: (select) => select(SESSION_LIST),
+})
+surface.sidebar.mutate((live) => {
+  const members = Object.assign({}, live.members)
+  delete members['w-fresh']
+  return Object.assign({}, live, {
+    members,
+    groups: live.groups.map((group) => (group && group.id === 'lab'
+      ? Object.assign({}, group, { sort: 'manual' })
+      : group)),
+  })
+})
+await settle(region)
+
+// A group the reader had folded is unfolded for its new project: a row added
+// inside a folded group is a row nobody can see, which reads as nothing having
+// happened at all.
+surface.sidebar.mutate((live) => Object.assign({}, live, {
+  groups: live.groups.map((group) => (group && group.id === 'lab'
+    ? Object.assign({}, group, { collapsed: true })
+    : group)),
+}))
+const foldedAddTree = await openRowMenu(sbNodes(await settle(region), 'section')[0], 'groupMenu')
+elements(foldedAddTree).find((node) => node.props['data-id'] === 'newProject').props.onClick({})
+await settle(region)
+await sleep(520)
+assert.equal(
+  surface.sidebar.groups(surface.sidebar.snapshot().layout).find((group) => group.id === 'lab').collapsed,
+  false,
+  'the group unfolds so the project it just received is on screen',
+)
+
 const renameGroupTree = await openRowMenu(sbNodes(await settle(region), 'section')[0], 'groupMenu')
 elements(byClass(renameGroupTree, 'ui-menu')[0]).find((node) => node.props['data-id'] === 'rename').props.onClick({})
 const groupEditorTree = await settle(region)
@@ -3176,6 +3287,29 @@ try {
   const dirEditingAgain = await settle(regionDir)
   sbNodes(dirEditingAgain, 'dirPath')[0].props.onChange({ target: { value: '/home/me/projects/deep' } })
   const dirTyped = await settle(regionDir)
+  // The dialog names the folder its confirm action will register, and while the
+  // field is open that name is the draft. Without this line the only way to know
+  // what the button does was to remember whether Enter had walked the list to the
+  // typed path — which is exactly the "it created the default folder instead"
+  // report this answers.
+  const dirTargetLine = sbNodes(dirTyped, 'dirTarget')[0]
+  assert.ok(dirTargetLine, 'the dialog says where the workspace will be created')
+  assert.ok(
+    text(dirTargetLine).includes('/home/me/projects/deep'),
+    'and it names the folder in the field, got: ' + text(dirTargetLine),
+  )
+  // The dialog's height chain. A flex child that shrinks clips its text, which is
+  // how the line the reader needs to read lost the lower half of its glyphs; the
+  // folder list is the one child that gives way, so the text above it keeps its
+  // height and the list scrolls instead.
+  assert.ok(
+    sbStyles.includes('.ph-sb-dir-list{display:flex;flex-direction:column;gap:1px;min-height:0;overflow:auto;flex:1 1 auto}'),
+    'the folder list carries the shrink, not the lines above it',
+  )
+  assert.ok(
+    sbStyles.includes('.ph-sb-dir-target{flex:none;overflow-wrap:anywhere;'),
+    'and the target line keeps its own height and wraps the path it names',
+  )
   sbNodes(dirTyped, 'dirPath')[0].props.onKeyDown({ key: 'Enter', stopPropagation() {} })
   await settle(regionDir)
   await sleep(20)
@@ -3191,6 +3325,37 @@ try {
     'and the chosen folder becomes a workspace through the shipped service',
   )
   assert.equal(byClass(dirAfter, 'ph-sb-dir').length, 0, 'the dialog closes once the workspace exists')
+
+  // The same confirm with the field still open — no Enter, nothing walked: the
+  // typed path is the target, resolved by the Host so the workspace stores its
+  // canonical spelling. Typing a folder and clicking the confirm is one gesture;
+  // it must not need a second one to be believed.
+  SERVICE_FAILURES.push('uiWorkspace.pickDirectory')
+  const noEnterAddTree = await openRowMenu(await settle(regionDir), 'add')
+  elements(byClass(byClass(noEnterAddTree, 'ph-sb-wide')[0], 'ui-menu')[0])
+    .find((node) => node.props['data-id'] === 'newProject').props.onClick({})
+  let noEnterPanel = await settle(regionDir)
+  await sleep(20)
+  noEnterPanel = await settle(regionDir)
+  assert.equal(byClass(noEnterPanel, 'ph-sb-dir').length, 1, 'the browser is up again for the second add')
+  sbNodes(noEnterPanel, 'dirEditPath')[0].props.onClick({})
+  const noEnterEditing = await settle(regionDir)
+  sbNodes(noEnterEditing, 'dirPath')[0].props.onChange({ target: { value: '/home/me/projects/later' } })
+  const noEnterTyped = await settle(regionDir)
+  assert.ok(
+    text(sbNodes(noEnterTyped, 'dirTarget')[0]).includes('/home/me/projects/later'),
+    'the target line follows the draft as it is typed',
+  )
+  sbNodes(noEnterTyped, 'dirChoose')[0].props.onClick({})
+  await settle(regionDir)
+  await sleep(20)
+  const noEnterAfter = await settle(regionDir)
+  assert.deepEqual(
+    lastServiceCall('workspaces', 'create').args,
+    [{ path: '/home/me/projects/later' }],
+    'the confirm registers the typed path without an Enter first',
+  )
+  assert.equal(byClass(noEnterAfter, 'ph-sb-dir').length, 0, 'and the dialog closes on the workspace it made')
 } finally {
   SERVICE_FAILURES.splice(dirArmedAt)
   delete shippedServices.uiWorkspace.listDirectory

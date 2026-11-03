@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.2] — 2026-11-03
+
+### Changed
+- In workspace picker UI, the path typed into the field is the folder that gets registered.
+
+### Fixed
+- A workspace added from a category's own add control is filed into
+  that category.
+- A category ordered by recency sorts a workspace without sessions by its creation instant instead of leaving it at the bottom.
+
 ## [0.1.1] — 2026-11-02
 
 ### Fixed
