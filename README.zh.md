@@ -4,6 +4,7 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![node: >=22.19](https://img.shields.io/badge/node-%3E%3D22.19-339933.svg)](package.json)
 [![DSH: 0.2.x](https://img.shields.io/badge/DSH-0.2.x-6f42c1.svg)](package.json)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 [English](README.md) | [简体中文](README.zh.md)
 
