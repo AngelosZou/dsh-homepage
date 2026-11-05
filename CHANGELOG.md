@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.3] — 2026-11-05
+
+### Changed
+- The audit card can customize the prompt and choose model now.
+
 ## [0.1.2] — 2026-11-03
 
 ### Changed
