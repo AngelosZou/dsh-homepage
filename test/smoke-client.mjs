@@ -5006,8 +5006,8 @@ tree = await settle(main.render, { t })
 
 const startCalls = calls.slice(auditCallsBefore).filter((entry) => entry.endpoint === 'homepage/pluginAuditStart')
 assert.equal(startCalls.length, 1, 'starting a review is one call')
-assert.deepEqual(startCalls[0].payload.args, { options: { target: 'acme/evil-plugin', mode: 'install' } },
-  'the host is handed the trimmed target and the mode the card is set to, and nothing else')
+assert.deepEqual(startCalls[0].payload.args, { options: { target: 'acme/evil-plugin' } },
+  'the host is handed the trimmed target and nothing else')
 
 // A live review is followed on the card's own timer: the stage is the only
 // progress a user can see, and the verdict arrives without anyone reloading.
@@ -5173,23 +5173,16 @@ auditPane = await startAuditReview('acme/mystery', auditFixture('warn', {
 assert.ok(text(auditPane).includes(t('pluginAudit.compat.unknown')),
   'an unreadable runtime version must not read as a pass, got: ' + text(auditPane))
 
-// ----------------------------------------------------- the second mode: review
+// ------------------------------------------------------- one review path
 //
-// Review-then-install is the default, but a review on its own is worth having: the
-// user can ask for several, keep them in the history and decide later. The mode is
-// part of the request, so the same call that names the target says which one it is.
+// There is no mode picker any more: every audit is a read-only review, and the
+// user decides about installing from the record. The only segmented control left
+// is the current/history pane switch.
 const segmentsOf = (pane) => byClass(pane, 'ph-segment')
 const segmentNamed = (pane, label) => segmentsOf(pane).filter((node) => text(node) === label)[0]
-assert.equal(segmentsOf(auditPane).length, 4,
-  'the expanded card has two two-way choices: how to review, and which pane is on show')
-assert.ok(segmentNamed(auditPane, t('pluginAudit.mode.install')).props.className.includes('is-active'),
-  'review-then-install is the default')
-const reviewOnly = segmentNamed(auditPane, t('pluginAudit.mode.review'))
-assert.ok(reviewOnly, 'the card must offer a review with nothing installed behind it')
-reviewOnly.props.onClick()
-tree = await settle(main.render, { t })
-auditPane = byClass(tree, 'ph-focus-card')[0]
-const cleanReview = auditFixture('safe', { mode: 'review', verdict: 'safe', summary: 'Nothing was installed.' })
+assert.equal(segmentsOf(auditPane).length, 2,
+  'the only segmented choice left is the current/history pane switch')
+const cleanReview = auditFixture('safe', { verdict: 'safe', summary: 'Nothing was installed.' })
 FIXTURES['homepage/pluginAuditStart'] = cleanReview
 FIXTURES['homepage/pluginAuditStatus'] = cleanReview
 const reviewStartsBefore = calls.filter((entry) => entry.endpoint === 'homepage/pluginAuditStart').length
@@ -5206,11 +5199,11 @@ tree = await settle(main.render, { t })
 auditPane = byClass(tree, 'ph-focus-card')[0]
 const reviewStarts = calls.filter((entry) => entry.endpoint === 'homepage/pluginAuditStart')
 assert.equal(reviewStarts.length, reviewStartsBefore + 1, 'starting a second review is one more call')
-assert.deepEqual(reviewStarts[reviewStarts.length - 1].payload.args, { options: { target: 'dsh-note', mode: 'review', selection: { provider: 'test', model: 'reviewer', reasoningEffort: 'high' } } },
-  'the host receives the review model and supported reasoning effort')
-assert.ok(text(auditPane).includes(t('pluginAudit.state.safe')), 'the review-only audit reads as cleared')
+assert.deepEqual(reviewStarts[reviewStarts.length - 1].payload.args, { options: { target: 'dsh-note', selection: { provider: 'test', model: 'reviewer', reasoningEffort: 'high' } } },
+  'the host receives the review model and supported reasoning effort, with no mode field')
+assert.ok(text(auditPane).includes(t('pluginAudit.state.safe')), 'the review reads as cleared')
 assert.equal(buttons(auditPane, t('pluginAudit.action.installNow')).length, 1,
-  'a cleared review-only audit can still be installed by hand — just never on its own')
+  'a cleared review can still be installed by hand — just never on its own')
 
 // ------------------------------------------------------- the review history
 //
@@ -5225,7 +5218,7 @@ FIXTURES['homepage/pluginAuditList'] = {
       summary: 'Installs a shell script the package does not declare.',
       plugin: { input: 'dsh-note', kind: 'npm', name: 'dsh-note', version: '1.2.3', repo: 'acme/dsh-note', spec: 'dsh-note@1.2.3' },
     }),
-    auditFixture('safe', { auditId: 'audit-review', mode: 'review', verdict: 'safe', summary: 'Nothing was installed.' }),
+    auditFixture('safe', { auditId: 'audit-review', verdict: 'safe', summary: 'Nothing was installed.' }),
     auditFixture('unsafe', { auditId: 'audit-old', verdict: 'unsafe', summary: 'Exfiltrates credentials.' }),
   ],
 }

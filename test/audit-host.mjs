@@ -23,7 +23,6 @@ import assert from 'node:assert/strict'
 import { DEFAULT_AUDIT_INSTRUCTIONS as sharedInstructions } from '../lib/audit-instructions.js'
 import {
   AUDIT_LEVELS,
-  AUDIT_MODES,
   AUDIT_SCENARIOS,
   AUDIT_STATES,
   AUDIT_TOOL_NAME,
@@ -435,8 +434,8 @@ assert.ok(promptOf.includes('a-1'), 'a prompt can be written for a record withou
     assert.equal(buildAuditPrompt(audit, blank), defaultPrompt, 'blank guidance falls back to the default')
   }
   const custom = '  重点核查网络请求。\n保留缩进和换行。  '
-  for (const mode of ['install', 'review']) {
-    const text = buildAuditPrompt({ ...audit, mode }, custom)
+  {
+    const text = buildAuditPrompt(audit, custom)
     assert.ok(text.includes(custom), 'custom guidance retains its formatting')
     assert.ok(!text.includes(sharedInstructions), 'custom guidance replaces the default')
     for (const required of [
@@ -445,7 +444,7 @@ assert.ok(promptOf.includes('a-1'), 'a prompt can be written for a record withou
       AUDIT_TOOL_NAME, '`auditId` 必须是 `custom-audit`',
       '`summary`', '`findings`', '`level`', '只汇报一次', '不确定就给 `warn`',
       '不要修改任何文件', '不要自己安装插件', '不要执行仓库里的代码',
-      mode === 'review' ? '仅审核' : '审核后安装',
+      '只做审核',
     ]) {
       assert.ok(text.slice(text.indexOf(custom) + custom.length).includes(required), 'host appends required context or constraint: ' + required)
     }
@@ -537,25 +536,19 @@ assert.equal(
 )
 assert.equal(await versionFromEntry('C:\\nowhere\\x.js', { readFile: readFileFake }), '', 'an unknown layout answers nothing')
 
-// ------------------------------------------------------- the two modes
+// ------------------------------------------------------- one review path
 //
-// Reviewing is worth doing on its own, so the store keeps what was asked for: an
-// audit started as a review never installs itself, and the prompt says so, because
-// the session should not promise the user something the host will not do.
-assert.deepEqual(AUDIT_MODES, ['install', 'review'], 'there are two ways to review a plugin')
+// There is no install mode any more: every audit is a read-only review, and the
+// user decides about installing from the record. The prompt says so, and no
+// verdict acknowledgement promises an automatic install.
 {
   const registry = createAuditRegistry({ now: () => 1000, makeId: () => 'a1' })
   const target = { input: 'dsh-note', name: 'dsh-note', version: '1.2.3', repo: 'acme/dsh-note' }
-  const install = registry.start({ target, findings: [] })
-  assert.equal(install.mode, 'install', 'the default is review-then-install')
-  assert.ok(registry.prompt('a1').includes('审核后安装'), 'and its prompt promises the install only if it clears')
-  const review = registry.start({ target, mode: 'review', findings: [] })
-  assert.equal(review.mode, 'review', 'a review-only audit says so')
-  assert.ok(registry.prompt(review.id).includes('仅审核'), 'and its prompt says nothing will be installed')
-  assert.ok(!registry.prompt(review.id).includes('直接安装'), 'not the sentence that promises an install')
-  assert.equal(registry.start({ target, mode: 'sideways', findings: [] }).mode, 'install', 'an unknown mode is the default')
-  assert.ok(verdictAcknowledgement('safe', 'review').includes('不会自动安装'), 'the session is told a review-only clear does not install')
-  assert.ok(verdictAcknowledgement('safe', 'install').includes('不会自动安装'), 'and that no mode installs by itself')
+  const audit = registry.start({ target, findings: [] })
+  assert.equal(Object.prototype.hasOwnProperty.call(audit, 'mode'), false, 'records no longer carry a mode')
+  assert.ok(registry.prompt('a1').includes('只做审核'), 'the prompt describes the single review path')
+  assert.ok(verdictAcknowledgement('safe').includes('不会自动安装'), 'a clean verdict never installs by itself')
+  assert.ok(verdictAcknowledgement('warn').includes('确认'), 'a warning still asks the user')
 }
 
 // ------------------------------------------------------------ the history
@@ -570,14 +563,13 @@ assert.deepEqual(AUDIT_MODES, ['install', 'review'], 'there are two ways to revi
     { id: 'old-1', state: 'safe', target: { name: 'dsh-old' }, startedAt: 1000, updatedAt: 1000 },
     null,
     { noId: true },
-    { id: 'old-2', state: 'installed', mode: 'review', target: { name: 'dsh-old' }, startedAt: 2000, updatedAt: 3000, installed: true, findings: [{ level: 'info', title: 'x' }] },
+    { id: 'old-2', state: 'installed', target: { name: 'dsh-old' }, startedAt: 2000, updatedAt: 3000, installed: true, findings: [{ level: 'info', title: 'x' }] },
   ])
   assert.equal(taken, 2, 'only records that look like audits are taken')
   const list = registry.list()
   assert.deepEqual(list.map((entry) => entry.id), ['old-2', 'old-1'], 'newest first')
   assert.equal(list[1].verdict, 'warn', 'a loaded record keeps its verdict')
   assert.equal(list[0].installed, true, 'and what was done about it')
-  assert.equal(list[0].mode, 'review', 'including the mode it was started in')
   registry.start({ target: { name: 'dsh-note' }, findings: [] })
   assert.ok(calls.length >= 1, 'every change tells the caller it is time to save')
   const snapshot = registry.snapshot()

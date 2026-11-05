@@ -174,7 +174,7 @@ endpoints marked —.
 | `projects` | `{force?}` | Workspace registry plus per-repo git readings; `available: false` when the registry is missing. |
 | `hygiene` | `{force?}` | Category sizes, largest items and reclaimable logs under `<DSH_HOME>`. |
 | `toolUsage` | `{force?}` | Per-tool calls, errors, argument/output volume, estimated tokens and time, grouped by project. |
-| `pluginAuditStart` | `{target, mode?, prompt?, selection?}` | Starts an audit (`mode`: `install` or `review`) and returns the record. The host fetches the source into an immutable snapshot; the review session receives only the three `audit_source_*` readers and the verdict tool. |
+| `pluginAuditStart` | `{target, prompt?, selection?}` | Starts a review and returns the record. Every audit is read-only: the host fetches the source into an immutable snapshot, the review session receives only the three `audit_source_*` readers and the verdict tool, and installation waits for the user's decision. |
 | `pluginAuditStatus` / `pluginAuditList` | `{auditId?}` / — | One audit or the newest one (`null` when none); `{audits}`, newest first. A record carries `source` (`kind`, `ref`, `artifactSha256`, `fileCount`, `truncated`, `anomalies`) next to the verdict. |
 | `pluginAuditDecide` | `{auditId, decision, override?}` | The updated audit record. No verdict installs by itself: this endpoint is the user's install/decline action. |
 | `skillList` | `{cwd?}` | Scanned roots, effective catalog, duplicates and `counts`. |

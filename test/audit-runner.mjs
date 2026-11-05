@@ -164,12 +164,14 @@ function makeEngine(options = {}) {
         id: options.sessionId,
         session,
         followups: [],
+        modelSelections: [],
+        model: { select: (selection) => { agent.modelSelections.push({ ...selection }) } },
         whenIdle: () => idle,
         async followup(message) { agent.followups.push(message) },
       }
       state.created.push({ options, agent, events, idle: () => idleResolve(), hooks, toolLog, agentCtx })
       // The real engine runs `setup` during create, before the first turn.
-      await options.setup(agentCtx)
+      await options.setup(agentCtx, agent)
       return { agent, dispose: async () => { state.disposed += 1 } }
     },
   }
@@ -271,14 +273,14 @@ function publish(state, session, event) {
   for (const [index, audit] of audits.entries()) {
     const selection = selections[index] || DEFAULT_SELECTION
     const created = state.created.find((entry) => entry.agent.id === audit.session.id)
-    deepEqual(created.options.agentOptions, { provider: selection.provider, model: selection.model })
-    const hooks = created.hooks
-    const inherited = { provider: selection.provider, model: selection.model, reasoningEffort: 'high', extra: true }
-    const request = await hooks[0].handler({ agent: { session: { requestHeader: () => undefined } } }, async () => inherited)
-    deepEqual(request, { ...selection, extra: true })
-    equal(inherited.reasoningEffort, 'high', 'the request hook does not mutate upstream request data')
-    const other = { provider: 'another', model: 'another', reasoningEffort: 'keep' }
-    deepEqual(await hooks[0].handler({ agent: {} }, async () => other), other)
+    const expected = {
+      provider: selection.provider,
+      model: selection.model,
+      ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort }),
+    }
+    deepEqual(created.options.agentOptions, expected, 'the route is given at creation')
+    deepEqual(created.agent.modelSelections, [expected],
+      'the same selection is recorded before step preparation')
   }
   deepEqual((await runner.models()).defaultSelection, DEFAULT_SELECTION)
 }
@@ -327,7 +329,7 @@ function publish(state, session, event) {
 {
   const { state, runner } = makeEngine()
   const prompts = ['  重点检查网络请求。\n逐项说明风险。  ', '审'.repeat(20000), undefined, '', ' \t\n\u3000']
-  const audits = await Promise.all(prompts.map((prompt) => runner.start({ target: 'dsh-note', prompt, mode: 'review' })))
+  const audits = await Promise.all(prompts.map((prompt) => runner.start({ target: 'dsh-note', prompt })))
   for (const [index, audit] of audits.entries()) {
     const session = state.created.find((entry) => entry.agent.id === audit.session.id)
     const text = session.agent.followups[0].content[0].text
@@ -337,7 +339,7 @@ function publish(state, session, event) {
     for (const required of [
       '`auditId` 必须是 `' + audit.auditId + '`', AUDIT_TOOL_NAME,
       'dsh-note @ 1.2.3', 'https://github.com/example/dsh-note', 'postinstall',
-      '本机 DSH 版本', '仅审核', '只汇报一次',
+      '本机 DSH 版本', '只做审核', '只汇报一次',
       '不要修改任何文件', '不要自己安装插件', '不要执行仓库里的代码',
     ]) {
       assert(text.includes(required), 'a session always receives host-owned context: ' + required)
@@ -747,55 +749,39 @@ function publish(state, session, event) {
   equal(state.created.length, 0, 'no session is created without a model to run it on')
 }
 
-// The profile's own selection is carried onto the session's requests until it has
-// a header of its own, so the reasoning effort it was created with is not lost.
+// The profile's selection is frozen on the unpublished Agent with
+// `agent.model.select()` before step preparation; the deprecated request-time
+// hook is not used, because DSH rejects an effort change after that point.
 {
   const { state, runner } = makeEngine()
   await runner.start({ target: 'dsh-note' })
-  const hooks = state.created[0].hooks
-  equal(hooks.length, 1, 'creation registers one request hook')
-  equal(hooks[0].event, 'agent/request', 'on the request waterfall')
-  const fresh = { session: { requestHeader: () => undefined } }
-  const resolved = await hooks[0].handler({ agent: fresh }, async () => ({
-    provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'low',
-  }))
-  equal(resolved.reasoningEffort, 'high', 'the profile\'s reasoning effort is applied to the first request')
-  const recorded = { session: { requestHeader: () => ({ provider: 'deepseek-official', model: 'deepseek-flash' }) } }
-  const kept = await hooks[0].handler({ agent: recorded }, async () => ({
-    provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'low',
-  }))
-  equal(kept.reasoningEffort, 'low', 'once the session has its own header the hook leaves it alone')
+  const created = state.created[0]
+  equal(created.hooks.length, 0, 'no agent/request hook is installed')
+  deepEqual(created.agent.modelSelections, [DEFAULT_SELECTION],
+    'the reasoning effort is recorded before the first step')
 }
 
-// --------------------------------------------------------- review only
+// --------------------------------------------------------- one review path
 //
-// Review-then-install is the default, but a review on its own is worth having:
-// the user can ask for several, keep them as records, and decide later. No mode
-// installs a `safe` verdict by itself; this one simply never asked to, and the
-// record still offers the install afterwards.
+// The card no longer asks how a review should be treated: every audit is a
+// read-only review, and the record is where the user decides about installing.
+// A legacy `mode` field is ignored rather than bringing the old behaviour back.
 {
   const { state, runner } = makeEngine()
-  const audit = await runner.start({ target: 'dsh-note', mode: 'review' })
-  equal(audit.mode, 'review', 'the mode an audit was started with travels with it')
+  const audit = await runner.start({ target: 'dsh-note', mode: 'something-else' })
+  equal(audit.mode, undefined, 'audit records carry no mode')
   const tool = runner.tool()
   const reported = await tool.execute(
     { auditId: audit.auditId, verdict: 'safe', summary: '源码正常，没有发现问题。' },
     { agent: { id: audit.session.id } },
   )
   await tick()
-  equal(state.installs.length, 0, 'a review-only audit clears without installing anything')
+  equal(state.installs.length, 0, 'a safe audit clears without installing anything')
   assert(String(reported.text).indexOf('不会自动安装') >= 0, 'and the session is told nothing was installed')
   const installed = await runner.decide({ auditId: audit.auditId, decision: 'install' })
   await tick()
   equal(state.installs.length, 1, 'the record itself can still be installed afterwards')
   equal(installed.state, 'installed', 'and the record says so')
-}
-
-// A mode that is neither of the two is the default, never a third state.
-{
-  const { runner } = makeEngine()
-  const audit = await runner.start({ target: 'dsh-note', mode: 'something-else' })
-  equal(audit.mode, 'install', 'an unknown mode falls back to review-then-install')
 }
 
 // ------------------------------------------------- the history across runs
@@ -810,7 +796,6 @@ function publish(state, session, event) {
       state: 'warn',
       stage: 'verdict',
       detail: '',
-      mode: 'install',
       target: { input: 'dsh-note', kind: 'npm', name: 'dsh-note', version: '1.2.3', spec: 'dsh-note@1.2.3', repo: 'acme/dsh-note' },
       session: { id: 'plugin-audit-from-last-time', title: 'review: dsh-note' },
       findings: [{ level: 'warn', title: 'postinstall runs a shell script' }],
