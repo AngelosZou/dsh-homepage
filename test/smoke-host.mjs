@@ -56,6 +56,7 @@ const account = {
 }
 
 const tools = []
+const guards = []
 const provided = {}
 const injections = []
 const effects = []
@@ -83,7 +84,10 @@ const llm = {
 }
 const ctx = {
   get(key) {
-    if (key === 'tools') return { register: (tool) => { tools.push(tool) } }
+    if (key === 'tools') return {
+      register: (tool) => { tools.push(tool) },
+      guard: (guard) => { guards.push(guard); return () => {} },
+    }
     if (key === 'deepseekAccount') return account
     if (key === 'timer') return timer
     if (key === 'llm') return llm
@@ -147,6 +151,9 @@ const config = { exposeTool: true, toolLanguage: 'zh' }
 }
 
 mod.apply(ctx, config)
+equal(guards.length, 1, 'the audit execution guard is registered with the host')
+equal(guards[0]({ agent: { id: 'not-an-audit' }, name: 'bash' }), undefined,
+  'the guard only answers for live audit sessions')
 
 // The host half observes the balance shortly after start and then on a slow
 // interval, so the ledger is populated — and a day nobody looks at still gets a

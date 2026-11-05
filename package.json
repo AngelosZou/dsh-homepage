@@ -79,7 +79,7 @@
   "scripts": {
     "build": "node scripts/build-client.mjs",
     "check:build": "node scripts/build-client.mjs --check",
-    "test": "node scripts/_check-hygiene.mjs && node test/validate-manifest.mjs && node test/device-sampler.mjs && node test/dsh-sampler.mjs && node test/dsh-install.mjs && node test/sidebar-host.mjs && node test/audit-host.mjs && node test/audit-runner.mjs && node test/skill-host.mjs && node test/skill-sources.mjs && node test/collector.mjs && node test/collector-client.mjs && node test/actions.mjs && node test/session-card.mjs && node test/projects-host.mjs && node test/projects-card.mjs && node test/hygiene-host.mjs && node test/hygiene-card.mjs && node test/tool-usage-host.mjs && node test/tool-usage-card.mjs && node test/smoke-host.mjs && node test/smoke-client.mjs && node test/skill-card.mjs"
+    "test": "node scripts/_check-hygiene.mjs && node test/validate-manifest.mjs && node test/device-sampler.mjs && node test/dsh-sampler.mjs && node test/dsh-install.mjs && node test/sidebar-host.mjs && node test/audit-host.mjs && node test/audit-runner.mjs && node test/source-snapshot.mjs && node test/skill-host.mjs && node test/skill-sources.mjs && node test/collector.mjs && node test/collector-client.mjs && node test/actions.mjs && node test/session-card.mjs && node test/projects-host.mjs && node test/projects-card.mjs && node test/hygiene-host.mjs && node test/hygiene-card.mjs && node test/tool-usage-host.mjs && node test/tool-usage-card.mjs && node test/smoke-host.mjs && node test/smoke-client.mjs && node test/skill-card.mjs"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.5"

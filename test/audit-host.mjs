@@ -108,6 +108,17 @@ const local = parseTarget('D:\\Projects\\node\\thing')
 assert.equal(local.kind, 'spec', 'a Windows path is a spec, not a package name')
 assert.equal(local.name, 'thing')
 
+const refTarget = parseTarget('owner/repo#v1.2.3')
+assert.equal(refTarget.ref, 'v1.2.3', 'a GitHub shorthand can pin a ref')
+assert.equal(refTarget.spec, 'github:owner/repo#v1.2.3', 'the pinned ref travels to the installer')
+const refUrl = parseTarget('https://github.com/owner/repo#main')
+assert.equal(refUrl.full, 'owner/repo', 'a URL hash is not part of the repository name')
+assert.equal(refUrl.ref, 'main', 'a URL hash pins a ref')
+const refPrefixed = parseTarget('github:owner/repo#main')
+assert.equal(refPrefixed.kind, 'vcs')
+assert.equal(refPrefixed.ref, 'main', 'a github: prefix keeps its ref')
+assert.equal(refPrefixed.spec, 'github:owner/repo#main')
+
 assert.throws(() => parseTarget('   '), /empty target/, 'an empty target has no default')
 
 // ---------------------------------------------------------- staticFindings
@@ -207,12 +218,21 @@ const githubFetch = fixtureFetch({
     description: 'a plugin',
     repository: { url: 'https://github.com/o/r' },
   },
+  'https://raw.githubusercontent.com/o/r/v1/package.json': {
+    name: 'the-plugin',
+    version: '0.3.0',
+    description: 'a plugin',
+    repository: { url: 'https://github.com/o/r' },
+  },
 })
 const resolvedGithub = await resolveTarget('o/r', { fetchJson: githubFetch.fetchJson })
 assert.equal(resolvedGithub.name, 'the-plugin', 'the repository manifest names the package')
 assert.equal(resolvedGithub.version, '0.3.0')
 assert.equal(resolvedGithub.spec, 'github:o/r', 'a repository is installed as a github spec')
 assert.equal(resolvedGithub.findings.some((item) => item.level === 'warn'), false, 'a readable repository with a clean manifest has nothing to warn about')
+const resolvedRef = await resolveTarget('o/r#v1', { fetchJson: githubFetch.fetchJson })
+assert.equal(resolvedRef.spec, 'github:o/r#v1', 'resolution keeps the user-pinned ref in the install spec')
+assert.equal(resolvedRef.ref, 'v1', 'and on the resolved target')
 
 const bareFetch = fixtureFetch({})
 const resolvedBare = await resolveTarget('o/r', { fetchJson: bareFetch.fetchJson })
@@ -343,7 +363,7 @@ assert.equal(needsConfirmation('warn'), true)
 assert.equal(needsConfirmation('unsafe'), true)
 assert.equal(needsConfirmation('safe'), false)
 assert.ok(verdictAcknowledgement('unsafe').includes('拒绝'))
-assert.ok(verdictAcknowledgement('safe').includes('直接安装'))
+assert.ok(verdictAcknowledgement('safe').includes('不会自动安装'))
 
 const declined = registryService.decide(opened.id, 'decline')
 assert.equal(declined.state, 'declined')
@@ -400,9 +420,17 @@ assert.ok(promptOf.includes('a-1'), 'a prompt can be written for a record withou
     target: { input: 'owner/plugin', name: 'plugin', version: '1.2.3', repo: 'https://github.com/owner/plugin' },
     findings: [{ level: 'warn', title: 'postinstall', detail: 'node setup.js' }],
     compatibility: { runtime: '0.2.1', incompatible: [{ name: 'dsh' }] },
+    source: {
+      kind: 'npm', label: 'plugin@1.2.3', ref: '1.2.3', fileCount: 2, byteCount: 42,
+      artifactSha256: 'b'.repeat(64), truncated: false, anomalies: [{ code: 'symlink', path: 'bin/x' }],
+    },
   }
   const defaultPrompt = buildAuditPrompt(audit)
   assert.ok(defaultPrompt.includes(sharedInstructions), 'omitting guidance preserves the default workflow')
+  assert.ok(defaultPrompt.includes('源码快照'), 'the prompt names the host-prepared snapshot')
+  assert.ok(defaultPrompt.includes('b'.repeat(64)), 'the prompt carries the audited digest')
+  assert.ok(defaultPrompt.includes('symlink'), 'the prompt reports snapshot anomalies as evidence')
+  assert.ok(defaultPrompt.includes('没有 shell'), 'the prompt states the session has no shell')
   for (const blank of ['', ' \t\r\n\u3000', ' '.repeat(20000)]) {
     assert.equal(buildAuditPrompt(audit, blank), defaultPrompt, 'blank guidance falls back to the default')
   }
@@ -527,7 +555,7 @@ assert.deepEqual(AUDIT_MODES, ['install', 'review'], 'there are two ways to revi
   assert.ok(!registry.prompt(review.id).includes('直接安装'), 'not the sentence that promises an install')
   assert.equal(registry.start({ target, mode: 'sideways', findings: [] }).mode, 'install', 'an unknown mode is the default')
   assert.ok(verdictAcknowledgement('safe', 'review').includes('不会自动安装'), 'the session is told a review-only clear does not install')
-  assert.ok(verdictAcknowledgement('safe', 'install').includes('直接安装'), 'and that the default one does')
+  assert.ok(verdictAcknowledgement('safe', 'install').includes('不会自动安装'), 'and that no mode installs by itself')
 }
 
 // ------------------------------------------------------------ the history

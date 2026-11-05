@@ -1,5 +1,12 @@
 # Changelog
 
+## Unrelease
+
+### Changed
+- The plugin-audit session is now capability-limited.
+- The host fetches audit source from an allowlist into a content-addressed snapshot.
+- No verdict installs a plugin automatically.
+
 ## [0.1.3] — 2026-11-05
 
 ### Changed

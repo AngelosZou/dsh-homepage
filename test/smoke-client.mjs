@@ -4917,6 +4917,11 @@ function auditFixture(state, extra) {
     summary: '',
     findings: [],
     plugin: AUDIT_PLUGIN,
+    source: {
+      kind: 'npm', label: 'acme/evil-plugin', ref: '1.2.3', pinned: true,
+      installSpec: 'acme-evil-plugin@1.2.3', artifactSha256: 'a'.repeat(64),
+      fileCount: 3, byteCount: 120, truncated: false, anomalies: [],
+    },
     session: AUDIT_SESSION,
     installed: false,
     install: null,
@@ -5159,6 +5164,8 @@ auditPane = await startAuditReview('dsh-note', auditFixture('safe', {
 }))
 assert.ok(text(auditPane).includes(t('pluginAudit.compat.ok', { runtime: '0.2.1-alpha.3' })),
   'a range that fits says so, got: ' + text(auditPane))
+assert.equal(buttons(auditPane, t('pluginAudit.action.installNow')).length, 1,
+  'a safe install-mode audit offers the install button instead of installing by itself')
 auditPane = await startAuditReview('acme/mystery', auditFixture('warn', {
   verdict: 'warn',
   compatibility: null,

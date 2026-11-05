@@ -42,7 +42,7 @@ artwork, visibility and motion.
 
 | Card | What it does |
 | --- | --- |
-| **Plugin audit** | Runs a session to review a given plugin for security. It can be asked to install automatically after a passing review, or to return the review report only. |
+| **Plugin audit** | Runs a capability-limited session that statically reviews a plugin's source. The host fetches the artifact from an allowlisted platform into an immutable snapshot; the session can only read that snapshot and report a verdict. Only a source pinned to an exact version/commit can be installed, and installation always waits for the user's confirmation |
 | **Sessions** | How many sessions are running, waiting on you or unread, each with a shortcut into it. |
 | **Projects** | Every workspace's branch, dirty count, ahead/behind, last commit, session count and extra worktrees. |
 | **Tool usage** | Tool call counts, error rate, argument and output volume, estimated tokens and time, filterable by project. |

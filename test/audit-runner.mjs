@@ -11,11 +11,13 @@
  *     events do not.
  *  3. The verdict channel is bound to the audit's session: a report from another
  *     session is refused, and one audit cannot report twice.
- *  4. `safe` installs without asking, `warn` waits for the user, `unsafe` refuses
- *     to install, and a declined verdict is a record of its own.
- *  5. An install result is reported as what it is: restart-required is installed,
+ *  4. No verdict installs by itself: `safe` and `warn` wait for the user, `unsafe`
+ *     refuses to install, and a declined verdict is a record of its own.
+ *  5. The session is locked to the three snapshot tools plus the verdict tool; a
+ *     global `bash`/`web_fetch` call is denied at execution.
+ *  6. An install result is reported as what it is: restart-required is installed,
  *     a failed install keeps DSH's own reason, a cancelled install is declined.
- *  6. A review that ends without a verdict is failed, not silently running.
+ *  7. A review that ends without a verdict is failed, not silently running.
  *
  * Run: node test/audit-runner.mjs
  */
@@ -90,22 +92,74 @@ function modelRegistry() {
   }
 }
 
+/** One prepared snapshot, enough for the runner and the three source tools. */
+function fakeSnapshot() {
+  const source = {
+    kind: 'npm',
+    label: 'dsh-note@1.2.3',
+    ref: '1.2.3',
+    requestedRef: '1.2.3',
+    commit: null,
+    installSpec: 'dsh-note@1.2.3',
+    pinned: true,
+    url: 'https://registry.npmjs.org/dsh-note/-/dsh-note-1.2.3.tgz',
+    artifactSha256: 'a'.repeat(64),
+    artifactBytes: 42,
+    fileCount: 1,
+    byteCount: 10,
+    truncated: false,
+    anomalies: [],
+  }
+  const file = { path: 'package.json', kind: 'file', size: 10, binary: false, skipped: false }
+  return {
+    source,
+    manifest: { version: 1, source, files: [file] },
+    list: () => ({ source, total: 1, truncated: false, entries: [file] }),
+    read: async () => ({ path: 'package.json', totalLines: 1, startLine: 1, endLine: 1, text: '     1  {}', truncated: false }),
+    grep: async () => ({ matches: [], filesScanned: 1, truncated: false }),
+    verify: async () => ({ ok: true }),
+    dispose: async () => {},
+  }
+}
+
 /**
  * One fake engine: an `agents` service that remembers what it was asked for,
  * records what the review session said, and can be told when the turn is over.
- * @param options - `{ runtimeVersion }`, the version the compatibility check sees.
+ * @param options - `{ runtimeVersion, prepareSource }`.
  * @returns `{ state, runner }`.
  */
 function makeEngine(options = {}) {
   const runtime = options.runtimeVersion === undefined ? '0.2.1-alpha.3' : options.runtimeVersion
-  const state = { created: [], installs: [], requests: [], handlers: [], flushed: 0, installResult: null, disposed: 0 }
+  const state = {
+    created: [], installs: [], requests: [], handlers: [], prepared: [],
+    flushed: 0, installResult: null, disposed: 0,
+  }
   let serial = 0
+  const prepareSource = options.prepareSource === undefined
+    ? async (target) => {
+      state.prepared.push(target.input)
+      return fakeSnapshot()
+    }
+    : options.prepareSource
+  const withoutTools = options.withoutTools === true
   const agents = {
     async create(options) {
       const events = []
       let idleResolve = null
       const idle = new Promise((resolve) => { idleResolve = resolve })
       const session = { id: options.sessionId, header: options.meta, snapshotEvents: () => events.slice() }
+      const hooks = []
+      const toolLog = { registered: [], restricted: [], guards: [] }
+      const agentCtx = {
+        on: (event, handler) => { hooks.push({ event, handler }); return () => {} },
+        ...(withoutTools ? {} : {
+          tools: {
+            register: (definition) => { toolLog.registered.push(definition); return () => {} },
+            restrict: (filter) => { toolLog.restricted.push(filter); return () => {} },
+            guard: (guard) => { toolLog.guards.push(guard); return () => {} },
+          },
+        }),
+      }
       const agent = {
         id: options.sessionId,
         session,
@@ -113,7 +167,9 @@ function makeEngine(options = {}) {
         whenIdle: () => idle,
         async followup(message) { agent.followups.push(message) },
       }
-      state.created.push({ options, agent, events, idle: () => idleResolve() })
+      state.created.push({ options, agent, events, idle: () => idleResolve(), hooks, toolLog, agentCtx })
+      // The real engine runs `setup` during create, before the first turn.
+      await options.setup(agentCtx)
       return { agent, dispose: async () => { state.disposed += 1 } }
     },
   }
@@ -129,6 +185,7 @@ function makeEngine(options = {}) {
     }),
     llm: () => options.llm === undefined ? modelRegistry() : options.llm,
     permissions: () => (options.permissions === undefined ? null : options.permissions),
+    prepareSource,
     // The audit history file, when the case supplies one: the runner loads it
     // before its first answer and writes every change back through it.
     store: options.store,
@@ -215,8 +272,7 @@ function publish(state, session, event) {
     const selection = selections[index] || DEFAULT_SELECTION
     const created = state.created.find((entry) => entry.agent.id === audit.session.id)
     deepEqual(created.options.agentOptions, { provider: selection.provider, model: selection.model })
-    const hooks = []
-    await created.options.setup({ on: (event, handler) => { hooks.push({ event, handler }) } })
+    const hooks = created.hooks
     const inherited = { provider: selection.provider, model: selection.model, reasoningEffort: 'high', extra: true }
     const request = await hooks[0].handler({ agent: { session: { requestHeader: () => undefined } } }, async () => inherited)
     deepEqual(request, { ...selection, extra: true })
@@ -323,6 +379,8 @@ function publish(state, session, event) {
   equal(state.created.length, 1, 'one review session is opened')
   equal(state.created[0].options.meta.cwd, 'C:/audit-dir', 'the session works in the audit directory')
   equal(state.created[0].options.meta.workspace, undefined, 'and joins no workspace')
+  equal(state.created[0].options.meta.agentPreset, undefined,
+    'the audit mounts no preset: its tools are the three source tools plus the verdict channel')
   // The model selection is not decoration: the profile's persona renders
   // {{model}} out of `agent.options.model`, so a session created without one
   // cannot assemble its prompt and the whole turn fails on the first message.
@@ -331,20 +389,36 @@ function publish(state, session, event) {
   equal(state.created[0].options.agentOptions.model, 'deepseek-flash',
     'and on its own model, which is what {{model}} renders')
   equal(typeof state.created[0].options.setup, 'function', 'creation also installs the session\'s own selection')
+  equal(state.prepared.length, 1, 'the host prepared exactly one source snapshot')
+  equal(first.source.artifactSha256, 'a'.repeat(64), 'the record carries the audited source digest')
+  const registered = state.created[0].toolLog.registered.map((definition) => definition.name)
+  deepEqual(registered, ['audit_source_list', 'audit_source_read', 'audit_source_grep'],
+    'the session gets the three data-only source tools')
+  deepEqual(state.created[0].toolLog.restricted[0], { allow: ['report_plugin_audit'] },
+    'every global tool except the verdict channel is hidden from the session')
+  equal(state.created[0].toolLog.guards.length, 1, 'the session also installs its own execution guard')
+  equal(state.created[0].toolLog.guards[0]({ name: 'audit_source_read' }), undefined,
+    'the scoped guard allows a source tool')
+  assert(String(state.created[0].toolLog.guards[0]({ name: 'bash' })).indexOf('不可用') >= 0,
+    'the scoped guard denies a shell tool')
   equal(String(first.session.id), String(state.created[0].agent.id), 'the record carries the session the card can open')
   const message = state.created[0].agent.followups[0]
   equal(message.role, 'user', 'the review session is driven by a user message')
   const text = message.content[0].text
   assert(text.indexOf(first.auditId) >= 0, 'the prompt names the audit id the verdict must carry')
   assert(text.indexOf(AUDIT_TOOL_NAME) >= 0, 'the prompt names the tool to report with')
-  assert(text.indexOf('raw.githubusercontent.com') >= 0, 'the prompt says where the source can be read')
+  assert(text.indexOf('源码快照') >= 0, 'the prompt describes the host-prepared snapshot')
+  assert(text.indexOf('audit_source_read') >= 0, 'the prompt names the only file tool the session has')
+  assert(text.indexOf('a'.repeat(64)) >= 0, 'the prompt carries the digest the verdict is tied to')
+  assert(text.indexOf('没有 shell') >= 0, 'the prompt states that no shell is available')
+  assert(text.indexOf('raw.githubusercontent.com') === -1, 'the session is not told to fetch source over the network')
 
   // The session's own events are the progress line.
   const session = state.created[0].agent.session
   publish(state, session, { type: 'turn/start' })
   equal((await runner.status({ auditId: first.auditId })).stage, 'reading', 'a started turn shows in the record')
-  publish(state, session, { type: 'tool/call', data: { name: 'web_fetch' } })
-  equal((await runner.status({ auditId: first.auditId })).detail.indexOf('web_fetch') >= 0, true, 'the tool being called is named')
+  publish(state, session, { type: 'tool/call', data: { name: 'audit_source_read' } })
+  equal((await runner.status({ auditId: first.auditId })).detail.indexOf('audit_source_read') >= 0, true, 'the tool being called is named')
   publish(state, { id: 'someone-else' }, { type: 'turn/end' })
   equal((await runner.status({ auditId: first.auditId })).stage, 'tool', 'another session\'s events do not move this audit')
 
@@ -362,18 +436,24 @@ function publish(state, session, event) {
     findings: [{ level: 'info', title: '入口只做 IPC 转发', ref: 'lib/index.js:12' }],
   }, { agent: { id: first.session.id } })
   equal(safe.verdict, 'safe', 'the tool answers with the verdict it recorded')
+  assert(String(safe.text).indexOf('不会自动安装') >= 0, 'a safe verdict tells the session it is not installed automatically')
   await tick()
   await tick()
-  equal(state.installs.length, 1, 'a safe verdict installs without asking')
+  equal(state.installs.length, 0, 'a safe verdict does not install by itself')
+  const waiting = await runner.status({ auditId: first.auditId })
+  equal(waiting.state, 'safe', 'the record waits at safe for the user')
+  const installed = await runner.decide({ auditId: first.auditId, decision: 'install' })
+  await tick()
+  equal(state.installs.length, 1, 'the user can install from the record')
   equal(state.installs[0].spec, 'dsh-note@1.2.3', 'the install uses the resolved spec')
   equal(state.installs[0].options.requestId, first.auditId, 'and carries the audit id as its request id')
-  const installed = await runner.status({ auditId: first.auditId })
   equal(installed.state, 'installed', 'the record ends installed')
   equal(installed.installed, true, 'and says so in the field the card reads')
   equal(installed.verdict, 'safe', 'the verdict is kept')
   assert(installed.summary.indexOf('入口与依赖') >= 0, 'and so is the summary behind it')
   equal(installed.findings.length, 2, 'the evidence keeps both the manifest signal and what the review reported')
   assert(installed.findings.some((finding) => finding.ref === 'lib/index.js:12'), 'and the reported evidence is in it')
+  equal(installed.source.artifactSha256, 'a'.repeat(64), 'the record still names the audited artifact')
 
   let twice = ''
   try {
@@ -384,6 +464,84 @@ function publish(state, session, event) {
   let empty = ''
   try { await runner.start({ target: '   ' }) } catch (error) { empty = error.message }
   assert(empty.length > 0, 'an empty target is refused with a reason')
+}
+
+// ------------------------------------------- source preparation and capability guard
+
+{
+  const { state, runner } = makeEngine({
+    prepareSource: async () => { throw new Error('registry unreachable') },
+  })
+  const failed = await runner.start({ target: 'dsh-note' })
+  equal(failed.state, 'failed', 'a failed source snapshot fails the audit before a session is opened')
+  equal(failed.stage, 'source-failed', 'and says which stage failed')
+  assert(failed.detail.indexOf('registry unreachable') >= 0, 'quoting the reason the snapshot gave')
+  equal(failed.source, null, 'no source is recorded when none was prepared')
+  equal(state.created.length, 0, 'no review session is opened without a snapshot')
+}
+
+{
+  const { state, runner } = makeEngine({ withoutTools: true })
+  const audit = await runner.start({ target: 'dsh-note' })
+  equal(audit.state, 'failed', 'a session without a controllable tool registry is refused')
+  equal(audit.stage, 'session-failed', 'and says the session failed to start')
+  assert(audit.detail.indexOf('工具注册表') >= 0, 'quoting the missing capability')
+  equal(state.created.length, 1, 'the creation was attempted')
+  equal(state.created[0].agent.followups.length, 0, 'no prompt is delivered to an unrestricted session')
+}
+
+{
+  const { state, runner } = makeEngine()
+  const audit = await runner.start({ target: 'dsh-note' })
+  const agent = state.created[0].agent
+  equal(runner.isAuditSession(agent), true, 'the live audit agent is recognized')
+  equal(runner.isAuditSession({ id: 'someone-else' }), false, 'another agent is not')
+  assert(String(runner.guard({ agent, name: 'bash' })).indexOf('不可用') >= 0,
+    'a shell call is denied at execution')
+  assert(String(runner.guard({ agent, name: 'web_fetch' })).indexOf('不可用') >= 0,
+    'a network call is denied at execution')
+  equal(runner.guard({ agent, name: 'audit_source_read' }), undefined, 'a source tool is allowed')
+  equal(runner.guard({ agent, name: 'report_plugin_audit' }), undefined, 'the verdict tool is allowed')
+  equal(runner.guard({ agent: { id: 'other' }, name: 'bash' }), undefined,
+    'the guard does not touch sessions that are not audits')
+  equal((await runner.status({ auditId: audit.auditId })).source.kind, 'npm',
+    'the record exposes the audited source metadata')
+}
+
+{
+  const unpinned = fakeSnapshot()
+  unpinned.source = { ...unpinned.source, pinned: false }
+  const { state, runner } = makeEngine({ prepareSource: async () => unpinned })
+  const audit = await runner.start({ target: 'dsh-note' })
+  await runner.report({ auditId: audit.auditId, verdict: 'safe', summary: '看着没事。' },
+    { agent: { id: audit.session.id } })
+  const refused = await runner.decide({ auditId: audit.auditId, decision: 'install' })
+  equal(refused.state, 'failed', 'an unpinned source is not installed')
+  equal(refused.stage, 'source-unpinned', 'the record says why the install stopped')
+  assert(refused.detail.indexOf('不可变版本') >= 0, 'quoting the reason')
+  equal(state.installs.length, 0, 'nothing reached the installer')
+}
+
+{
+  const pinned = fakeSnapshot()
+  pinned.source = {
+    ...pinned.source,
+    kind: 'github',
+    label: 'owner/repo@abc',
+    ref: 'a'.repeat(40),
+    installSpec: 'github:owner/repo#' + 'a'.repeat(40),
+    pinned: true,
+  }
+  let verified = 0
+  pinned.verify = async () => { verified += 1; return { ok: false, reason: 'should not be called' } }
+  const { state, runner } = makeEngine({ prepareSource: async () => pinned })
+  const audit = await runner.start({ target: 'dsh-note' })
+  await runner.report({ auditId: audit.auditId, verdict: 'safe', summary: '看着没事。' },
+    { agent: { id: audit.session.id } })
+  const installed = await runner.decide({ auditId: audit.auditId, decision: 'install' })
+  equal(installed.state, 'installed', 'a pinned artifact installs')
+  equal(state.installs[0].spec, 'github:owner/repo#' + 'a'.repeat(40), 'the install uses the pinned source spec')
+  equal(verified, 0, 'a pinned source is not re-fetched before install')
 }
 
 // --------------------------------------------- warn waits, unsafe refuses
@@ -445,9 +603,7 @@ function publish(state, session, event) {
   }
   const audit = await runner.start({ target: 'dsh-note' })
   await runner.report({ auditId: audit.auditId, verdict: 'safe', summary: '没问题。' }, { agent: { id: audit.session.id } })
-  await tick()
-  await tick()
-  const failed = await runner.status({ auditId: audit.auditId })
+  const failed = await runner.decide({ auditId: audit.auditId, decision: 'install' })
   equal(failed.state, 'failed', 'an install that fails leaves the audit failed')
   assert(failed.detail.indexOf('incompatible-version') >= 0, 'with the reason DSH gave')
   equal(failed.installed, false, 'and the card is not told it was installed')
@@ -596,9 +752,7 @@ function publish(state, session, event) {
 {
   const { state, runner } = makeEngine()
   await runner.start({ target: 'dsh-note' })
-  const hooks = []
-  const agentCtx = { on: (event, handler) => { hooks.push({ event, handler }); return () => {} } }
-  await state.created[0].options.setup(agentCtx)
+  const hooks = state.created[0].hooks
   equal(hooks.length, 1, 'creation registers one request hook')
   equal(hooks[0].event, 'agent/request', 'on the request waterfall')
   const fresh = { session: { requestHeader: () => undefined } }
@@ -616,8 +770,9 @@ function publish(state, session, event) {
 // --------------------------------------------------------- review only
 //
 // Review-then-install is the default, but a review on its own is worth having:
-// the user can ask for several, keep them as records, and decide later. So a
-// `safe` verdict only reaches the installer when the audit was asked to install.
+// the user can ask for several, keep them as records, and decide later. No mode
+// installs a `safe` verdict by itself; this one simply never asked to, and the
+// record still offers the install afterwards.
 {
   const { state, runner } = makeEngine()
   const audit = await runner.start({ target: 'dsh-note', mode: 'review' })
@@ -657,6 +812,7 @@ function publish(state, session, event) {
       detail: '',
       mode: 'install',
       target: { input: 'dsh-note', kind: 'npm', name: 'dsh-note', version: '1.2.3', spec: 'dsh-note@1.2.3', repo: 'acme/dsh-note' },
+      session: { id: 'plugin-audit-from-last-time', title: 'review: dsh-note' },
       findings: [{ level: 'warn', title: 'postinstall runs a shell script' }],
       verdict: 'warn',
       summary: '装了 postinstall 脚本。',
@@ -670,6 +826,10 @@ function publish(state, session, event) {
   equal(list.audits.length, 1, 'a record left by the previous process is part of the history')
   equal(list.audits[0].auditId, 'audit-from-last-time', 'and keeps the id the card remembers')
   equal(list.audits[0].findings.length, 1, 'with the evidence it was decided on')
+  equal(runner.isAuditSession({ id: 'plugin-audit-from-last-time' }), true,
+    'a restored audit session is still recognized by the execution guard')
+  assert(typeof runner.guard({ agent: { id: 'plugin-audit-from-last-time' }, name: 'bash' }) === 'string',
+    'and a shell call on it is still denied')
   const fresh = await runner.start({ target: 'dsh-note' })
   await tick()
   assert(writes.length >= 1, 'starting an audit writes the history back')
