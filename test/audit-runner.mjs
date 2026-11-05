@@ -19,8 +19,10 @@
  *
  * Run: node test/audit-runner.mjs
  */
+import { deepEqual, rejects } from 'node:assert/strict'
 import { createAuditRunner, describeInstall } from '../lib/host/audit-runner.js'
 import { AUDIT_TOOL_NAME } from '../lib/host/audit.js'
+import { DEFAULT_AUDIT_INSTRUCTIONS } from '../lib/audit-instructions.js'
 
 let failures = 0
 function assert(condition, message) {
@@ -65,6 +67,29 @@ const OLD_PACKUMENT = {
   },
 }
 
+const DEFAULT_SELECTION = Object.freeze({ provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' })
+const MODEL_CATALOG = {
+  'deepseek-official': [
+    { id: 'deepseek-flash', name: 'DeepSeek Flash', reasoning: {
+      efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'low',
+    } },
+  ],
+  custom: [
+    { id: 'deepseek-flash', name: 'Custom Flash', reasoning: {
+      efforts: [{ id: 'off', name: 'Disabled' }, { id: 'thorough', name: 'Thorough' }], defaultEffort: 'off',
+    } },
+    { id: 'plain', name: 'Plain model' },
+  ],
+}
+
+/** The registry supplies reasoning metadata, without any hard-coded effort vocabulary. */
+function modelRegistry() {
+  return {
+    listProviders: () => Object.keys(MODEL_CATALOG).map((id) => ({ id, name: id })),
+    listModels: async (provider) => MODEL_CATALOG[provider],
+  }
+}
+
 /**
  * One fake engine: an `agents` service that remembers what it was asked for,
  * records what the review session said, and can be told when the turn is over.
@@ -99,8 +124,10 @@ function makeEngine(options = {}) {
     // The profile's own model selection. Without one the review session cannot
     // render its persona, so the runner has to be given one to work with.
     defaultModel: () => (options.model === null ? null : {
-      currentSelection: () => options.model || { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' },
+      currentSelection: () => options.model || DEFAULT_SELECTION,
+      set: () => { throw new Error('the global default must never be changed') },
     }),
+    llm: () => options.llm === undefined ? modelRegistry() : options.llm,
     permissions: () => (options.permissions === undefined ? null : options.permissions),
     // The audit history file, when the case supplies one: the runner loads it
     // before its first answer and writes every change back through it.
@@ -132,6 +159,151 @@ function makeEngine(options = {}) {
 /** Tell every listener about an event the review session published. */
 function publish(state, session, event) {
   for (const handler of state.handlers.slice()) handler(session, event)
+}
+
+// -------------------------------------------------- live model selection
+
+{
+  const { runner } = makeEngine()
+  deepEqual(await runner.models(), {
+    models: Object.entries(MODEL_CATALOG).flatMap(([provider, models]) => models.map((model) => ({
+      provider, model: model.id, name: model.name, efforts: model.reasoning?.efforts || [],
+    }))),
+    defaultSelection: DEFAULT_SELECTION,
+  })
+  const answer = await runner.models()
+  answer.defaultSelection.reasoningEffort = 'low'
+  answer.models[0].efforts[0].name = 'changed by caller'
+  equal((await runner.models()).defaultSelection.reasoningEffort, 'high', 'catalog results do not mutate the global default')
+  equal((await runner.models()).models[0].efforts[0].name, 'Low', 'catalog results do not mutate registry metadata')
+}
+
+{
+  const llm = modelRegistry()
+  const resolved = []
+  llm.listProviders = () => [{ id: 'broken' }, { id: 'custom' }]
+  llm.listModels = async (provider) => {
+    if (provider === 'broken') throw new Error('offline')
+    return [{ id: 'deepseek-flash', name: 'Custom Flash' }]
+  }
+  llm.resolveModelInfo = async (provider, model) => {
+    resolved.push([provider, model])
+    return { reasoning: { efforts: [{ id: 'configured', name: 'Configured', description: 'private metadata' }] } }
+  }
+  const { state, runner } = makeEngine({ llm })
+  deepEqual((await runner.models()).models, [{
+    provider: 'custom', model: 'deepseek-flash', name: 'Custom Flash', efforts: [{ id: 'configured', name: 'Configured' }],
+  }])
+  deepEqual(resolved, [['custom', 'deepseek-flash']])
+  await runner.start({ target: 'dsh-note', selection: { provider: 'custom', model: 'deepseek-flash', reasoningEffort: 'configured' } })
+  equal(state.created.length, 1, 'validation uses resolved reasoning metadata as the DSH catalog does')
+  await rejects(runner.start({ target: 'dsh-note', selection: { provider: 'custom', model: 'deepseek-flash', reasoningEffort: 'thorough' } }), /reasoningEffort/)
+}
+
+{
+  const { state, runner } = makeEngine()
+  const selections = [
+    undefined,
+    { provider: 'custom', model: 'deepseek-flash', reasoningEffort: 'thorough' },
+    { provider: 'custom', model: 'deepseek-flash', reasoningEffort: 'off' },
+    { provider: 'custom', model: 'deepseek-flash' },
+    { provider: 'custom', model: 'plain' },
+    { provider: 'deepseek-official', model: 'deepseek-flash' },
+  ]
+  const audits = await Promise.all(selections.map((selection) => runner.start({ target: 'dsh-note', selection })))
+  for (const [index, audit] of audits.entries()) {
+    const selection = selections[index] || DEFAULT_SELECTION
+    const created = state.created.find((entry) => entry.agent.id === audit.session.id)
+    deepEqual(created.options.agentOptions, { provider: selection.provider, model: selection.model })
+    const hooks = []
+    await created.options.setup({ on: (event, handler) => { hooks.push({ event, handler }) } })
+    const inherited = { provider: selection.provider, model: selection.model, reasoningEffort: 'high', extra: true }
+    const request = await hooks[0].handler({ agent: { session: { requestHeader: () => undefined } } }, async () => inherited)
+    deepEqual(request, { ...selection, extra: true })
+    equal(inherited.reasoningEffort, 'high', 'the request hook does not mutate upstream request data')
+    const other = { provider: 'another', model: 'another', reasoningEffort: 'keep' }
+    deepEqual(await hooks[0].handler({ agent: {} }, async () => other), other)
+  }
+  deepEqual((await runner.models()).defaultSelection, DEFAULT_SELECTION)
+}
+
+{
+  const writes = []
+  const { state, runner } = makeEngine({ store: { read: async () => [], write: async (records) => { writes.push(records) } } })
+  const invalid = [
+    null, false, 'custom', [], {}, { provider: 'custom' }, { model: 'plain' },
+    { provider: '', model: 'plain' }, { provider: 42, model: 'plain' },
+    { provider: 'custom', model: [] }, { provider: 'custom', model: ' ' },
+    { provider: 'unknown', model: 'plain' }, { provider: 'custom', model: 'unknown' },
+    { provider: 'custom', model: 'plain', reasoningEffort: 'high' },
+    ...['high', '', null, 42, false, {}, []].map((reasoningEffort) => ({ provider: 'custom', model: 'deepseek-flash', reasoningEffort })),
+  ]
+  for (const selection of invalid) {
+    await rejects(runner.start({ target: 'dsh-note', selection }), /selection|provider|model|reasoningEffort/)
+  }
+  equal(state.requests.length, 0, 'invalid selections fetch no source')
+  equal(state.created.length, 0, 'invalid selections open no sessions')
+  equal(state.installs.length, 0, 'invalid selections install nothing')
+  equal(writes.length, 0, 'invalid selections write no history')
+  equal((await runner.list()).audits.length, 0, 'invalid selections create no audit records')
+}
+
+{
+  const { state, runner } = makeEngine({ llm: null, model: null })
+  deepEqual(await runner.models(), { models: [], defaultSelection: null })
+  await rejects(runner.start({ target: 'dsh-note', selection: { provider: 'custom', model: 'plain' } }), /llm/)
+  equal(state.created.length, 0, 'an unavailable registry cannot silently bypass validation')
+  const explicit = makeEngine({ model: null })
+  equal((await explicit.runner.start({ target: 'dsh-note', selection: { provider: 'custom', model: 'plain' } })).state,
+    'running', 'explicit models work without a global default')
+  for (const model of [
+    { provider: 'missing', model: 'plain' },
+    { provider: 'custom', model: 'plain', reasoningEffort: 'high' },
+  ]) {
+    const invalidDefault = makeEngine({ model })
+    await rejects(invalidDefault.runner.start({ target: 'dsh-note' }), /provider|reasoningEffort/)
+    equal(invalidDefault.state.created.length, 0, 'default selections are validated too')
+  }
+}
+
+// -------------------------------------------------- editable audit guidance
+
+{
+  const { state, runner } = makeEngine()
+  const prompts = ['  重点检查网络请求。\n逐项说明风险。  ', '审'.repeat(20000), undefined, '', ' \t\n\u3000']
+  const audits = await Promise.all(prompts.map((prompt) => runner.start({ target: 'dsh-note', prompt, mode: 'review' })))
+  for (const [index, audit] of audits.entries()) {
+    const session = state.created.find((entry) => entry.agent.id === audit.session.id)
+    const text = session.agent.followups[0].content[0].text
+    const expected = index < 2 ? prompts[index] : DEFAULT_AUDIT_INSTRUCTIONS
+    assert(text.includes(expected), 'each concurrent session receives its own guidance or the default')
+    if (index < 2) assert(!text.includes(DEFAULT_AUDIT_INSTRUCTIONS), 'custom guidance replaces the default workflow')
+    for (const required of [
+      '`auditId` 必须是 `' + audit.auditId + '`', AUDIT_TOOL_NAME,
+      'dsh-note @ 1.2.3', 'https://github.com/example/dsh-note', 'postinstall',
+      '本机 DSH 版本', '仅审核', '只汇报一次',
+      '不要修改任何文件', '不要自己安装插件', '不要执行仓库里的代码',
+    ]) {
+      assert(text.includes(required), 'a session always receives host-owned context: ' + required)
+    }
+  }
+}
+
+{
+  const writes = []
+  const { state, runner } = makeEngine({ store: { read: async () => [], write: async (records) => { writes.push(records) } } })
+  const invalidPrompts = [null, false, 42, {}, [], new String('text'), 'x'.repeat(20001), ' '.repeat(20001)]
+  for (const prompt of invalidPrompts) {
+    let refused = ''
+    try { await runner.start({ target: 'dsh-note', prompt }) } catch (error) { refused = error.message }
+    assert(typeof prompt === 'string' ? /prompt.*20000/.test(refused) : /prompt.*字符串/.test(refused),
+      'invalid guidance rejects with a useful validation error')
+  }
+  equal(state.requests.length, 0, 'invalid guidance triggers no source fetch')
+  equal(state.created.length, 0, 'invalid guidance opens no session')
+  equal(state.installs.length, 0, 'invalid guidance starts no install')
+  equal(writes.length, 0, 'invalid guidance writes no history')
+  equal((await runner.list()).audits.length, 0, 'invalid guidance creates no audit record')
 }
 
 // -------------------------------------------------- the review really starts
@@ -414,11 +586,8 @@ function publish(state, session, event) {
 
 {
   const { state, runner } = makeEngine({ model: null })
-  const audit = await runner.start({ target: 'dsh-note' })
-  assert(audit.auditId.length > 0, 'the audit is still recorded when the session cannot be opened')
-  equal(audit.state, 'failed', 'an audit whose session cannot start is marked failed')
-  equal(audit.stage, 'session-failed', 'and the stage names the session rather than the review')
-  assert(audit.detail.indexOf('默认模型') >= 0, 'the reason is the missing model selection: ' + audit.detail)
+  await rejects(runner.start({ target: 'dsh-note' }), /默认模型/)
+  equal((await runner.list()).audits.length, 0, 'a missing default is refused before creating an audit')
   equal(state.created.length, 0, 'no session is created without a model to run it on')
 }
 

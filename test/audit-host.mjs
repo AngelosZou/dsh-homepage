@@ -20,6 +20,7 @@
  *    while a `safe` does not.
  */
 import assert from 'node:assert/strict'
+import { DEFAULT_AUDIT_INSTRUCTIONS as sharedInstructions } from '../lib/audit-instructions.js'
 import {
   AUDIT_LEVELS,
   AUDIT_MODES,
@@ -27,6 +28,7 @@ import {
   AUDIT_STATES,
   AUDIT_TOOL_NAME,
   AUDIT_VERDICTS,
+  DEFAULT_AUDIT_INSTRUCTIONS,
   auditToolParameters,
   buildAuditPrompt,
   compareVersions,
@@ -385,6 +387,54 @@ assert.equal(AUDIT_TOOL_NAME, 'report_plugin_audit', 'the prompt and the tool re
 
 const promptOf = buildAuditPrompt({ id: 'a-1', target: { input: 'x', name: 'x' }, findings: [] })
 assert.ok(promptOf.includes('a-1'), 'a prompt can be written for a record without a session')
+
+// Editable guidance is shared with the client build; context and constraints
+// belong to the host even when the user replaces the entire guidance text.
+{
+  assert.equal(DEFAULT_AUDIT_INSTRUCTIONS, sharedInstructions, 'the host re-exports the shared default')
+  assert.ok(sharedInstructions.includes('1. 取源码'), 'the default contains the review workflow')
+  assert.ok(!sharedInstructions.includes('auditId'), 'the dynamic report id is not editable guidance')
+  assert.ok(!sharedInstructions.includes('不要执行仓库里的代码'), 'safety constraints stay with the host')
+  const audit = {
+    id: 'custom-audit',
+    target: { input: 'owner/plugin', name: 'plugin', version: '1.2.3', repo: 'https://github.com/owner/plugin' },
+    findings: [{ level: 'warn', title: 'postinstall', detail: 'node setup.js' }],
+    compatibility: { runtime: '0.2.1', incompatible: [{ name: 'dsh' }] },
+  }
+  const defaultPrompt = buildAuditPrompt(audit)
+  assert.ok(defaultPrompt.includes(sharedInstructions), 'omitting guidance preserves the default workflow')
+  for (const blank of ['', ' \t\r\n\u3000', ' '.repeat(20000)]) {
+    assert.equal(buildAuditPrompt(audit, blank), defaultPrompt, 'blank guidance falls back to the default')
+  }
+  const custom = '  重点核查网络请求。\n保留缩进和换行。  '
+  for (const mode of ['install', 'review']) {
+    const text = buildAuditPrompt({ ...audit, mode }, custom)
+    assert.ok(text.includes(custom), 'custom guidance retains its formatting')
+    assert.ok(!text.includes(sharedInstructions), 'custom guidance replaces the default')
+    for (const required of [
+      'owner/plugin', 'plugin @ 1.2.3', 'https://github.com/owner/plugin',
+      'postinstall：node setup.js', '本机 DSH 版本：0.2.1', '版本相容性',
+      AUDIT_TOOL_NAME, '`auditId` 必须是 `custom-audit`',
+      '`summary`', '`findings`', '`level`', '只汇报一次', '不确定就给 `warn`',
+      '不要修改任何文件', '不要自己安装插件', '不要执行仓库里的代码',
+      mode === 'review' ? '仅审核' : '审核后安装',
+    ]) {
+      assert.ok(text.slice(text.indexOf(custom) + custom.length).includes(required), 'host appends required context or constraint: ' + required)
+    }
+  }
+  const boundary = '审'.repeat(20000)
+  assert.ok(buildAuditPrompt(audit, boundary).includes(boundary), '20000 characters are accepted intact')
+  for (const invalid of [null, false, 42, {}, [], new String('text')]) {
+    assert.throws(() => buildAuditPrompt(audit, invalid), /prompt.*字符串/, 'non-string guidance is rejected')
+  }
+  for (const tooLong of ['审'.repeat(20001), ' '.repeat(20001)]) {
+    assert.throws(() => buildAuditPrompt(audit, tooLong), /prompt.*20000/, 'the limit applies before trimming')
+  }
+  const customRegistry = createAuditRegistry({ makeId: () => audit.id })
+  customRegistry.start(audit)
+  assert.ok(customRegistry.prompt(audit.id, custom).includes(custom), 'the registry forwards custom guidance')
+  assert.ok(customRegistry.prompt(audit.id).includes(sharedInstructions), 'an override does not change future defaults')
+}
 
 // ------------------------------------------------- version compatibility
 //

@@ -73,11 +73,21 @@ const timer = {
     return () => { entry.disposed = true }
   },
 }
+const auditDefault = Object.freeze({ provider: 'review', model: 'review-model', reasoningEffort: 'deep' })
+const llm = {
+  listProviders: () => [{ id: 'review', name: 'Review provider' }],
+  listModels: async (provider) => {
+    equal(provider, 'review', 'audit models reads the live provider id')
+    return [{ id: 'review-model', name: 'Review model', reasoning: { efforts: [{ id: 'deep', name: 'Deep' }] } }]
+  },
+}
 const ctx = {
   get(key) {
     if (key === 'tools') return { register: (tool) => { tools.push(tool) } }
     if (key === 'deepseekAccount') return account
     if (key === 'timer') return timer
+    if (key === 'llm') return llm
+    if (key === 'agentDefaultModel') return { currentSelection: () => auditDefault }
     return undefined
   },
   provide(key, value) { provided[key] = value; return () => { delete provided[key] } },
@@ -199,9 +209,9 @@ const contribution = provided.typertContribution
 assert(contribution && Array.isArray(contribution.invocations), 'a typert contribution was registered')
 equal(contribution.package, 'dsh-homepage', 'contribution package')
 equal(contribution.face, 'host', 'contribution face')
-equal(contribution.invocations.length, 28, 'twenty-eight remote invocations')
+equal(contribution.invocations.length, 29, 'twenty-nine remote invocations')
 const methods = contribution.invocations.map((entry) => entry.method).sort().join(',')
-equal(methods, 'act,collect,device,dsh,dshCheck,dshInstall,dshLocal,environment,hygiene,overview,pluginAuditDecide,pluginAuditList,pluginAuditStart,pluginAuditStatus,projects,refresh,saveSidebarLayout,saveState,sidebarLayout,skillContent,skillDetail,skillInstall,skillList,skillSearch,skillSetEnabled,skillSources,state,toolUsage', 'invocation methods')
+equal(methods, 'act,collect,device,dsh,dshCheck,dshInstall,dshLocal,environment,hygiene,overview,pluginAuditDecide,pluginAuditList,pluginAuditModels,pluginAuditStart,pluginAuditStatus,projects,refresh,saveSidebarLayout,saveState,sidebarLayout,skillContent,skillDetail,skillInstall,skillList,skillSearch,skillSetEnabled,skillSources,state,toolUsage', 'invocation methods')
 for (const entry of contribution.invocations) {
   equal(typeof api[entry.method], 'function', 'the declared endpoint has a callable service method: ' + entry.method)
   equal(entry.namespace, 'homepage', 'invocation namespace for ' + entry.method)
@@ -215,6 +225,17 @@ for (const entry of contribution.invocations) {
 const overviewCall = contribution.invocations.find((entry) => entry.method === 'overview')
 equal(overviewCall.id, 'dsh-homepage#homepage/overview', 'invocation id shape')
 equal(overviewCall.parameters[0].name, 'options', 'overview takes options')
+const auditModelsCall = contribution.invocations.find((entry) => entry.method === 'pluginAuditModels')
+equal(auditModelsCall.id, 'dsh-homepage#homepage/pluginAuditModels', 'audit models descriptor id')
+equal(auditModelsCall.parameters.map((entry) => entry.name).join(','), 'options', 'audit models accepts the useRemote options envelope')
+equal(JSON.stringify(await api.pluginAuditModels({})), JSON.stringify({
+  models: [{ provider: 'review', model: 'review-model', name: 'Review model', efforts: [{ id: 'deep', name: 'Deep' }] }],
+  defaultSelection: auditDefault,
+}), 'audit models endpoint projects ctx llm and the read-only default selection')
+let invalidSelection = ''
+try { await api.pluginAuditStart({ target: 'dsh-note', selection: { provider: 'review', model: 'review-model', reasoningEffort: 'unknown' } }) }
+catch (error) { invalidSelection = error.message }
+assert(invalidSelection.includes('reasoningEffort'), 'audit start endpoint forwards selection to validation')
 
 // ------------------------------------------------------------------- tool
 

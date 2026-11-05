@@ -145,6 +145,9 @@ const hostSource = readFileSync(join(root, 'lib/index.js'), 'utf8')
 const clientSource = readFileSync(join(root, 'lib/client.js'), 'utf8')
 const endpoints = [...hostSource.matchAll(/remoteInvocation\(\s*'([A-Za-z0-9_]+)'/g)].map(m => m[1])
 ok(endpoints.length > 0, 'lib/index.js declares no remote invocations')
+ok(endpoints.includes('pluginAuditModels'), 'the audit model catalog endpoint is missing')
+ok(/remoteInvocation\('pluginAuditModels', \['options'\]\)/.test(hostSource),
+  'audit models must accept the options envelope sent by useRemote')
 for (const method of endpoints) {
   ok(clientSource.includes(`homepage/${method}`), `the client never calls the declared endpoint homepage/${method}`)
 }

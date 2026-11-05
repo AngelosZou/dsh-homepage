@@ -1229,6 +1229,10 @@ const FIXTURES = {
   // below swaps these for the audit it is exercising.
   'homepage/pluginAuditList': { audits: [] },
   'homepage/pluginAuditStatus': null,
+  'homepage/pluginAuditModels': {
+    defaultSelection: { provider: 'test', model: 'reviewer' },
+    models: [{ provider: 'test', model: 'reviewer', name: 'Reviewer', efforts: [{ id: 'high', name: 'High' }] }],
+  },
   'homepage/skillList': SKILL_LIST_FIXTURE,
   'homepage/skillSetEnabled': { ok: true, name: 'old-notes', mode: 'on', counts: SKILL_LIST_FIXTURE.counts, skills: SKILL_LIST_FIXTURE.skills },
   'homepage/skillContent': SKILL_CONTENT_FIXTURE,
@@ -4958,6 +4962,29 @@ assert.ok(text(auditPane).includes(t('pluginAudit.idle')), 'an untouched card sa
 assert.equal(buttons(auditPane, t('pluginAudit.action.start'))[0].props.disabled, true,
   'an empty target is not reviewable')
 
+assert.equal(byClass(auditPane, 'ph-audit-launch').length, 1, 'the target has a dedicated launch panel')
+assert.equal(byClass(auditPane, 'ph-audit-settings')[0].props.hidden, true, 'the editor starts collapsed')
+const promptTrigger = byClass(auditPane, 'ph-audit-prompt-trigger')[0]
+assert.equal(promptTrigger.props['aria-expanded'], false)
+promptTrigger.props.onClick()
+tree = await settle(main.render, { t })
+auditPane = byClass(tree, 'ph-focus-card')[0]
+assert.equal(byClass(auditPane, 'ph-audit-prompt-trigger')[0].props['aria-expanded'], true)
+assert.equal(byClass(auditPane, 'ph-audit-settings')[0].props.hidden, false, 'the visible prompt action opens the editor')
+const defaultPrompt = byClass(auditPane, 'ph-audit-prompt')[0].props.value
+assert.ok(defaultPrompt.includes('safe'), 'the editor displays the actual default guidance')
+byClass(auditPane, 'ph-audit-prompt')[0].props.onChange({ target: { value: '重点检查凭据外传' } })
+tree = await settle(main.render, { t })
+auditPane = byClass(tree, 'ph-focus-card')[0]
+buttons(auditPane, t('pluginAudit.prompt.save'))[0].props.onClick()
+tree = await settle(main.render, { t })
+auditPane = byClass(tree, 'ph-focus-card')[0]
+assert.equal(byClass(auditPane, 'ph-audit-prompt')[0].props.value, '重点检查凭据外传')
+buttons(auditPane, t('pluginAudit.prompt.reset'))[0].props.onClick()
+tree = await settle(main.render, { t })
+auditPane = byClass(tree, 'ph-focus-card')[0]
+assert.equal(byClass(auditPane, 'ph-audit-prompt')[0].props.value, defaultPrompt, 'reset restores the full default')
+
 const auditTarget = byClass(auditPane, 'ph-input')[0]
 assert.ok(auditTarget, 'the card must offer a field for the target')
 auditTarget.props.onChange({ target: { value: '  acme/evil-plugin  ' } })
@@ -5036,7 +5063,7 @@ assert.ok(text(findingRows[1]).includes(t('pluginAudit.risk.role')), 'a warn fin
 assert.ok(text(findingRows[1]).includes(t('pluginAudit.risk.why')), 'and why the plugin has it')
 assert.ok(text(findingRows[1]).includes(t('pluginAudit.risk.impact')), 'and what it could cost')
 assert.ok(text(findingRows[1]).includes(t('pluginAudit.scenario.supplyChain')), 'and names the situation')
-assert.equal(byClass(findingRows[2], 'ph-audit-finding-body').length, 0, 'an info finding starts folded')
+assert.equal(byClass(findingRows[2], 'ph-audit-reveal')[0].props.hidden, true, 'an info finding starts folded without unmounting its animated body')
 byClass(findingRows[2], 'ph-audit-finding-head')[0].props.onClick()
 tree = await settle(main.render, { t })
 auditPane = byClass(tree, 'ph-focus-card')[0]
@@ -5159,6 +5186,11 @@ const cleanReview = auditFixture('safe', { mode: 'review', verdict: 'safe', summ
 FIXTURES['homepage/pluginAuditStart'] = cleanReview
 FIXTURES['homepage/pluginAuditStatus'] = cleanReview
 const reviewStartsBefore = calls.filter((entry) => entry.endpoint === 'homepage/pluginAuditStart').length
+assert.equal(byClass(auditPane, 'ph-audit-model-select')[0].props.disabled, false)
+byClass(auditPane, 'ph-audit-effort-select')[0].props.onChange({ target: { value: 'high' } })
+tree = await settle(main.render, { t })
+auditPane = byClass(tree, 'ph-focus-card')[0]
+assert.equal(byClass(auditPane, 'ph-audit-model-select')[0].props.value, JSON.stringify(['test', 'reviewer']))
 byClass(auditPane, 'ph-input')[0].props.onChange({ target: { value: 'dsh-note' } })
 tree = await settle(main.render, { t })
 auditPane = byClass(tree, 'ph-focus-card')[0]
@@ -5167,8 +5199,8 @@ tree = await settle(main.render, { t })
 auditPane = byClass(tree, 'ph-focus-card')[0]
 const reviewStarts = calls.filter((entry) => entry.endpoint === 'homepage/pluginAuditStart')
 assert.equal(reviewStarts.length, reviewStartsBefore + 1, 'starting a second review is one more call')
-assert.deepEqual(reviewStarts[reviewStarts.length - 1].payload.args, { options: { target: 'dsh-note', mode: 'review' } },
-  'and the host is told this one only reviews')
+assert.deepEqual(reviewStarts[reviewStarts.length - 1].payload.args, { options: { target: 'dsh-note', mode: 'review', selection: { provider: 'test', model: 'reviewer', reasoningEffort: 'high' } } },
+  'the host receives the review model and supported reasoning effort')
 assert.ok(text(auditPane).includes(t('pluginAudit.state.safe')), 'the review-only audit reads as cleared')
 assert.equal(buttons(auditPane, t('pluginAudit.action.installNow')).length, 1,
   'a cleared review-only audit can still be installed by hand — just never on its own')
@@ -5190,6 +5222,10 @@ FIXTURES['homepage/pluginAuditList'] = {
     auditFixture('unsafe', { auditId: 'audit-old', verdict: 'unsafe', summary: 'Exfiltrates credentials.' }),
   ],
 }
+const catalogCallsBeforeTabs = calls.filter((entry) => entry.endpoint === 'homepage/pluginAuditModels').length
+const savedViewTransition = globalThis.document.startViewTransition
+let auditSnapshotCalls = 0
+globalThis.document.startViewTransition = () => { auditSnapshotCalls += 1 }
 const listBefore = calls.filter((entry) => entry.endpoint === 'homepage/pluginAuditList').length
 segmentNamed(auditPane, t('pluginAudit.tab.history')).props.onClick()
 tree = await settle(main.render, { t })
@@ -5227,6 +5263,11 @@ const openedCalls = calls.filter((entry) => entry.endpoint === 'homepage/pluginA
 assert.deepEqual(openedCalls[openedCalls.length - 1].payload.args, { options: { auditId: 'audit-old' } },
   'opening a record reads that record')
 assert.ok(text(auditPane).includes(t('pluginAudit.state.unsafe')), 'and the left pane shows it, got: ' + text(auditPane))
+assert.equal(auditSnapshotCalls, 0, 'tab navigation must not wait for a full-page view-transition snapshot')
+assert.equal(calls.filter((entry) => entry.endpoint === 'homepage/pluginAuditModels').length, catalogCallsBeforeTabs,
+  'returning to Current reuses the loaded model catalog instead of rediscovering providers')
+if (savedViewTransition === undefined) delete globalThis.document.startViewTransition
+else globalThis.document.startViewTransition = savedViewTransition
 
 // Leave the card as the rest of the file expects to find it: no notice, no
 // review, and no review fixtures behind the endpoints.

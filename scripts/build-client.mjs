@@ -22,6 +22,8 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { DEFAULT_AUDIT_INSTRUCTIONS } from '../lib/audit-instructions.js'
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const frameworkPath = join(root, 'lib', 'framework.part.js')
 const cardsDir = join(root, 'lib', 'cards')
@@ -87,7 +89,7 @@ export function compose({ framework, cards }) {
       const id = name.replace(/\.js$/, '')
       const banner = '    // ' + '-'.repeat(Math.max(4, 66 - id.length)) + ' ' + id + '\n'
         + '    // lib/cards/' + name + '\n'
-      return banner + '    ;(function (kit) {\n' + indent(stripHeader(normalizeEol(cardSource))) + '    })(Kit)\n'
+      return banner + '    ;(function (kit) {\n' + indent(stripHeader(normalizeEol(cardSource)).replace("/* @audit-instructions */ ''", () => JSON.stringify(DEFAULT_AUDIT_INSTRUCTIONS))) + '    })(Kit)\n'
     })
     .join('\n')
 
