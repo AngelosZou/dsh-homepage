@@ -80,7 +80,7 @@ including a built-in one — requires `override: true`, otherwise it throws.
 | `effects` | `{outline, ripple, sheen, float, spotlight}` | all off | Animation defaults (see Effects). |
 | `refreshMs` | number | `0` | Refresh hint for polling bodies; the card still owns its timer. |
 | `expandable` / `draggable` / `resizable` | boolean | `true` | Turn that interaction off. |
-| `onMount` / `onExpand` / `onCollapse` | `(api) => void` | `null` | Lifecycle callbacks. |
+| `onMount` / `onExpand` / `onCollapse` | `(api) => void` | `null` | Lifecycle callbacks. `onMount` fires the first time the card is actually on the wall — a hidden card runs nothing until it is shown. |
 | `tags` / `order` / `version` | string[] / number / string | `[]` / `0` / `null` | Manifest tags, initial position hint (drag order wins) and registrant version. |
 | `dict` | `{zh, en}` | `null` | Card-local strings merged into the locale service. |
 | `override` | boolean | `false` | Required to replace another plugin's card. |
@@ -105,7 +105,9 @@ including a built-in one — requires `override: true`, otherwise it throws.
 
 Framework hooks are on `hooks`: `useStore()`, `useRemote(endpoint, args, {refreshMs, enabled})`
 (returns `{data, error, busy, reload, at, failures}`), `useClock(ms)`, `useNoticeOnce(api, key, level, text)`
-and `useAnnounce(api, key, notice)`.
+and `useAnnounce(api, key, notice)`. A poll is scheduled one tick at a time with a little
+jitter (about ±10%) so cards mounted together do not keep refreshing together, and
+`enabled: false` (or `refreshMs: 0`) stops the timer entirely.
 
 ## Controls (`actions` / `detailActions`)
 

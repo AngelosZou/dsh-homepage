@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5] — 2026-11-06
+
+### Changed
+- The plugin performs no background work.
+- Device readings work like a performance panel.
+- A hidden card is disabled.
+
 ## [0.1.4] — 2026-11-05
 
 ### Changed

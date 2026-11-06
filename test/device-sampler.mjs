@@ -1032,6 +1032,118 @@ function gpuOptions(overrides = {}) {
   console.log('  gpu: TTL cache, reset, gpu:false and the subprocess-free periodic tick')
 }
 
+// ------------------------------------------------------- probe sharing/cache
+
+{
+  // Two cards polling at the same instant must not pay for two subprocesses:
+  // the sample in flight is handed to the second caller unchanged.
+  resetDeviceCache()
+  let probes = 0
+  const options = gpuOptions({
+    runCommand: async () => {
+      probes += 1
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return { ok: true, stdout: JSON.stringify(GPU_FIXTURE), stderr: '' }
+    },
+  })
+  const pair = await Promise.all([sampleDevice(options), sampleDevice(options)])
+  assert.equal(probes, 1, 'two concurrent readers share the one GPU probe in flight')
+  assert.equal(pair[0], pair[1], 'the second reader gets the same sample document')
+  assert.equal(pair[0].gpu.usage, 0.23, 'and it is the real reading')
+  console.log('  gpu: concurrent readers share one in-flight probe')
+}
+
+{
+  // A broken or disabled counter provider used to spawn PowerShell on every
+  // poll. The failure verdict is now cached, so the retry rate is bounded.
+  resetDeviceCache()
+  const clock = fakeClock(1792000000000)
+  let probes = 0
+  const options = gpuOptions({
+    now: clock,
+    runCommand: async () => {
+      probes += 1
+      return { ok: true, stdout: '', stderr: '' }
+    },
+  })
+  const first = await sampleDevice(options)
+  assert.equal(first.gpu.usage, null, 'an empty counter answer is a missing reading')
+  clock.advance(10000)
+  await sampleDevice(options)
+  assert.equal(probes, 1, 'the failed verdict is reused inside the failure window')
+  clock.advance(51000)
+  await sampleDevice(options)
+  assert.equal(probes, 2, 'after the failure window the probe is retried')
+
+  // A working reading keeps its ordinary TTL (30s by default), so a fifteen
+  // second poll reuses it instead of probing again.
+  resetDeviceCache()
+  const goodClock = fakeClock(1792000000000)
+  let goodProbes = 0
+  const good = gpuOptions({
+    now: goodClock,
+    runCommand: async () => {
+      goodProbes += 1
+      return { ok: true, stdout: JSON.stringify(GPU_FIXTURE), stderr: '' }
+    },
+  })
+  await sampleDevice(good)
+  goodClock.advance(15000)
+  await sampleDevice(good)
+  assert.equal(goodProbes, 1, 'a fifteen-second poll is served from the GPU cache')
+  goodClock.advance(16000)
+  await sampleDevice(good)
+  assert.equal(goodProbes, 2, 'past thirty seconds the reading is refreshed')
+  console.log('  gpu: failed verdicts back off for a minute, good ones for thirty seconds')
+}
+
+// ----------------------------------------------- stale-while-revalidate
+
+{
+  // A performance panel polls quickly without paying for the GPU probe on
+  // every request: a stale verdict is served at once and the probe refreshes
+  // it in the background. The first request (cold cache) is the only one that
+  // waits.
+  resetDeviceCache()
+  const clock = fakeClock(1792000000000)
+  const refreshed = JSON.parse(JSON.stringify(GPU_FIXTURE))
+  refreshed.engines[0].UtilizationPercentage = 88
+  refreshed.engines[1].UtilizationPercentage = 0
+  let fixture = GPU_FIXTURE
+  let probes = 0
+  let deferred = false
+  let release = null
+  const options = gpuOptions({
+    now: clock,
+    runCommand: () => {
+      probes += 1
+      const body = { ok: true, stdout: JSON.stringify(fixture), stderr: '' }
+      if (!deferred) return Promise.resolve(body)
+      return new Promise((resolve) => { release = () => resolve(body) })
+    },
+  })
+
+  const cold = await sampleDevice(options)
+  assert.equal(cold.gpu.usage, 0.23, 'the cold sample waits once and gets a real reading')
+  assert.equal(probes, 1, 'the cold sample pays for one probe')
+
+  clock.advance(31000)
+  fixture = refreshed
+  deferred = true
+  const stale = await sampleDevice(options)
+  assert.equal(probes, 2, 'the stale poll starts a refresh')
+  assert.equal(stale.gpu.usage, 0.23, 'but answers with the last verdict instead of waiting')
+  assert.equal(typeof release, 'function', 'the refresh is actually in flight')
+
+  release()
+  for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve))
+  clock.advance(1000)
+  const fresh = await sampleDevice(options)
+  assert.equal(fresh.gpu.usage, 0.88, 'the next poll reads the refreshed verdict')
+  assert.equal(probes, 2, 'and does not start another probe')
+  console.log('  gpu: stale-while-revalidate serves a fast poll without blocking on the probe')
+}
+
 // ------------------------------------------------------------- helpers
 
 {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-homepage",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DeepSeek Harness plugin: a personal home page in the sidebar for a DSH instance. Review a plugin before installing it, and read sessions, projects, tool usage, device, storage, DSH cores, Skills and cost from one composable, registrable card wall.",
   "keywords": [
     "dsh-plugin",

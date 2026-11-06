@@ -155,33 +155,13 @@ equal(guards.length, 1, 'the audit execution guard is registered with the host')
 equal(guards[0]({ agent: { id: 'not-an-audit' }, name: 'bash' }), undefined,
   'the guard only answers for live audit sessions')
 
-// The host half observes the balance shortly after start and then on a slow
-// interval, so the ledger is populated — and a day nobody looks at still gets a
-// curve — before any browser opens the panel. Both go through the timer service,
-// so they are disposed with the plugin fiber. The device sampler keeps its own,
-// cheaper interval warm for the same reason: the chart has a window of samples
-// the moment somebody opens the card.
-const boot = effects.find((entry) => entry.label === 'dsh-homepage: balance sampling')
-assert(boot, 'apply schedules balance sampling')
-assert(typeof boot.cleanup === 'function', 'balance sampling is disposable')
-const deviceTick = effects.find((entry) => entry.label === 'dsh-homepage: device sampling')
-assert(deviceTick, 'apply schedules device sampling')
-assert(typeof deviceTick.cleanup === 'function', 'device sampling is disposable')
-equal(timers.length, 3, 'both samplers use the timer service')
-equal(timers[0].kind, 'timeout', 'the first observation is a one-shot')
-equal(timers[0].delay, 4000, 'the start-up observation waits for the account service to mount')
-equal(timers[1].kind, 'interval', 'later observations repeat')
-equal(timers[1].delay, 1800000, 'the background cadence is thirty minutes')
-equal(timers[2].kind, 'interval', 'the device sampler repeats')
-equal(timers[2].delay, 15000, 'the device cadence is fifteen seconds')
-timers[0].callback()
-await new Promise((resolve) => setTimeout(resolve, 120))
-assert(existsSync(join(home, 'storages', 'dsh-homepage', 'balance-ledger.json')),
-  'the start-up observation performs a real read and writes the ledger')
-boot.cleanup()
-deviceTick.cleanup()
-assert(timers[0].disposed && timers[1].disposed && timers[2].disposed,
-  'both sampling timers are disposed with the plugin fiber')
+// An installed plugin runs nothing on its own: no balance poll, no device
+// tick. Both readings are on demand (a mounted card or the model-facing tool),
+// so the ledger and the device history are filled only while somebody is
+// actually looking — and a hidden card never mounts at all.
+equal(timers.length, 0, 'apply schedules no background sampling timer')
+assert(!effects.some((entry) => /sampling/.test(String(entry.label))),
+  'apply registers no background sampler effect')
 
 const api = provided.homepage
 assert(api && typeof api === 'object', 'the host provides the homepage service')
