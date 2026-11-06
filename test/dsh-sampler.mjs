@@ -633,6 +633,154 @@ const RELEASES_FEED = feedOf([RELEASE_ENTRY])
   console.log('  offline: without a proxy the sampler degrades the same way instead of hanging')
 }
 
+// --------------------------------------------------------- proxy policy names
+
+{
+  resetDshCache()
+  const proxyGet = fakeProxy(feedReply(COMMITS_FEED))
+  const doc = await sampleDshRelease({
+    env: { ALL_PROXY: 'http://127.0.0.1:7890' },
+    now: fakeClock(1_700_000_000_000),
+    fetchImpl: fakeFetch(() => new Error('offline')),
+    proxyGet: proxyGet,
+    runCommand: fakeRun({ ok: false, stdout: '', stderr: '', code: 1 }),
+  })
+  assert.equal(doc.routes.commits, 'proxy', 'ALL_PROXY is a proxy this module honours, like the harness')
+  assert.equal(proxyGet.calls[0].proxy, 'http://127.0.0.1:7890', 'the tunnel uses the ALL_PROXY value')
+  console.log('  proxy: ALL_PROXY is honoured when HTTPS_PROXY is absent')
+}
+
+{
+  resetDshCache()
+  const proxyGet = fakeProxy(feedReply(COMMITS_FEED))
+  const doc = await sampleDshRelease({
+    env: { HTTPS_PROXY: 'http://127.0.0.1:7890', NO_PROXY: 'github.com' },
+    now: fakeClock(1_700_000_000_000),
+    fetchImpl: fakeFetch(() => new Error('offline')),
+    proxyGet: proxyGet,
+    runCommand: fakeRun({ ok: false, stdout: '', stderr: '', code: 1 }),
+  })
+  assert.equal(proxyGet.calls.filter((call) => call.url.includes('github.com')).length, 0,
+    'a target on NO_PROXY is not tunneled')
+  assert.equal(doc.routes.commits, 'error', 'the direct read still failed, and that is reported')
+  console.log('  proxy: NO_PROXY bypasses the tunnel instead of contradicting the harness policy')
+}
+
+{
+  resetDshCache()
+  const proxyGet = fakeProxy(feedReply(COMMITS_FEED))
+  const doc = await sampleDshRelease({
+    env: { HTTPS_PROXY: 'socks5://127.0.0.1:1080', HTTP_PROXY: 'http://127.0.0.1:7890' },
+    now: fakeClock(1_700_000_000_000),
+    fetchImpl: fakeFetch(() => new Error('offline')),
+    proxyGet: proxyGet,
+    runCommand: fakeRun({ ok: false, stdout: '', stderr: '', code: 1 }),
+  })
+  assert.equal(proxyGet.calls.filter((call) => call.url.startsWith('https:')).length, 0,
+    'an unusable HTTPS_PROXY keeps https direct instead of borrowing HTTP_PROXY')
+  assert.equal(doc.routes.commits, 'error', 'the direct https read failed, and that is reported')
+  console.log('  proxy: a SOCKS HTTPS_PROXY does not borrow HTTP_PROXY for https')
+}
+
+// ------------------------------------------------------------- npm fallback
+
+/** One npm `/latest` manifest for the fallback tests. */
+const NPM_MANIFEST = {
+  name: '@deepseek-ai/dsh',
+  version: '0.2.2-rc.1',
+  repository: { url: 'git+https://github.com/deepseek-ai/deepseek-harness.git' },
+  publish_time: '2026-11-04T09:20:32.310Z',
+}
+
+{
+  resetDshCache()
+  const fetchImpl = fakeFetch((url) => {
+    if (String(url).indexOf('registry.npmjs.org') >= 0) return feedReply(JSON.stringify(NPM_MANIFEST))
+    throw new Error('offline: ' + url)
+  })
+  const doc = await sampleDshRelease({
+    env: {},
+    now: fakeClock(1_700_000_000_000),
+    fetchImpl: fetchImpl,
+    proxyGet: fakeProxy(() => new Error('proxy offline')),
+    proxy: 'http://127.0.0.1:7890',
+    runCommand: fakeRun({ ok: false, stdout: '', stderr: '', code: 1 }),
+  })
+  assert.equal(doc.head, null, 'the version fallback does not invent a commit')
+  assert.equal(doc.release.name, 'v0.2.2-rc.1', 'the npm latest version becomes the reading')
+  assert.equal(doc.release.tag, 'dsh-v0.2.2-rc.1', 'the tag is derived from the version')
+  assert.equal(doc.routes.releases, 'npm', 'the route says which source answered')
+  assert.equal(doc.release.publishedAt, NPM_MANIFEST.publish_time, 'the registry publish time is kept')
+  assert.equal(doc.reason, 'network', 'the commit feed is still failed and says so')
+  console.log('  npm: a failed release feed falls back to the official registry')
+}
+
+{
+  resetDshCache()
+  const fetchImpl = fakeFetch((url) => {
+    if (String(url).indexOf('registry.npmjs.org') >= 0) return feedReply('', '')
+    if (String(url).indexOf('registry.npmmirror.com') >= 0) return feedReply(JSON.stringify(NPM_MANIFEST))
+    throw new Error('offline: ' + url)
+  })
+  const doc = await sampleDshRelease({
+    env: {},
+    now: fakeClock(1_700_000_000_000),
+    fetchImpl: fetchImpl,
+    proxyGet: fakeProxy(() => new Error('proxy offline')),
+    runCommand: fakeRun({ ok: false, stdout: '', stderr: '', code: 1 }),
+  })
+  assert.equal(doc.routes.releases, 'npmmirror', 'the mainland mirror answers when the official registry does not')
+  assert.equal(doc.release.name, 'v0.2.2-rc.1', 'the mirror carries the same version')
+  console.log('  npm: the mainland mirror answers when the official registry does not')
+}
+
+{
+  resetDshCache()
+  const wrong = Object.assign({}, NPM_MANIFEST, {
+    repository: { url: 'git+https://github.com/not-the-harness/other.git' },
+  })
+  const fetchImpl = fakeFetch((url) => (
+    String(url).indexOf('registry') >= 0 ? feedReply(JSON.stringify(wrong)) : (() => { throw new Error('offline') })()
+  ))
+  const doc = await sampleDshRelease({
+    env: {},
+    now: fakeClock(1_700_000_000_000),
+    fetchImpl: fetchImpl,
+    proxyGet: fakeProxy(() => new Error('proxy offline')),
+    runCommand: fakeRun({ ok: false, stdout: '', stderr: '', code: 1 }),
+  })
+  assert.equal(doc.release, null, 'a manifest for another repository is not installed as the version')
+  assert.equal(doc.routes.releases, 'error', 'and the release route still reports the failure')
+  console.log('  npm: a manifest whose repository does not match is refused')
+}
+
+// ------------------------------------------------------- failure memo window
+
+{
+  resetDshCache()
+  const clock = fakeClock(1_700_000_000_000)
+  const fetchImpl = fakeFetch(() => new Error('offline'))
+  const base = {
+    env: {},
+    now: clock,
+    fetchImpl: fetchImpl,
+    proxyGet: fakeProxy(() => new Error('proxy offline')),
+    runCommand: fakeRun({ ok: false, stdout: '', stderr: '', code: 1 }),
+  }
+  const first = await sampleDshRelease(base)
+  assert.equal(first.cached, false, 'the first failure is a live read')
+  const callsAfterFirst = fetchImpl.calls.length
+  clock.advance(10000)
+  const second = await sampleDshRelease(base)
+  assert.equal(second.cached, true, 'a failure inside the short window is reused')
+  assert.equal(fetchImpl.calls.length, callsAfterFirst, 'the short window costs no request')
+  clock.advance(31000)
+  const third = await sampleDshRelease(base)
+  assert.equal(third.cached, false, 'after the failure window the read is attempted again')
+  assert.ok(fetchImpl.calls.length > callsAfterFirst, 'the retry actually reaches the network seam')
+  console.log('  memo: a failed document is retried after 30s, not held for the five-minute window')
+}
+
 // -------------------------------------------------------------- never rejects
 
 {

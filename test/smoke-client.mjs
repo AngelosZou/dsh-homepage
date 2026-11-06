@@ -4341,7 +4341,7 @@ assert.ok(dshText.includes(DSH_FIXTURE.release.tag), 'the detail shows the tag t
 assert.ok(dshText.includes(DSH_FIXTURE.release.name), 'the detail shows the release name the user reads')
 assert.ok(dshText.includes('master'), 'the detail names the branch')
 assert.equal(byClass(dshPane, 'ph-tool').length, 3, 'every core under the root earns a row')
-assert.equal(byClass(dshPane, 'ph-chip').length, 1 + 5, 'the upstream verdict, plus a sync chip and a build chip per local core')
+assert.equal(byClass(dshPane, 'ph-chip').length, 1 + 5 + 1, 'the upstream verdict, a running marker, and a sync chip plus a build chip per local core')
 assert.equal(byClass(dshPane, 'ph-input').length, 1, 'the install root is an editable field')
 assert.ok(dshText.includes('5719020') && dshText.includes('dsh-v0.2.1-alpha.3'),
   'a core is identified by its commit and the tag it is on, got: ' + dshText)
@@ -5403,6 +5403,147 @@ byClass(tree, 'ph-studio-icon-button')[0].props.onClick()
 tree = await settle(main.render, { t })
 assert.equal(byClass(tree, 'ph-studio').length, 0, 'studio closes without changing the wall')
 assert.ok(selectedTitle)
+
+// --- the DSH card when the upstream cannot be read --------------------------
+// "读不到" must not be the whole message: the card has to say that the network
+// failed, and "无" must not be used for a root it never identified. This is the
+// exact signature users reported, so it is pinned here rather than inferred.
+const dshOriginal = FIXTURES['homepage/dsh']
+const dshCheckOriginal = FIXTURES['homepage/dshCheck']
+const dshLocalOriginal = FIXTURES['homepage/dshLocal']
+const dshFailure = {
+  at: DSH_FIXTURE.at,
+  sampleSeconds: 1,
+  repo: 'deepseek-ai/deepseek-harness',
+  branch: 'master',
+  head: null,
+  commits: [],
+  release: null,
+  releases: [],
+  routes: { commits: 'error', releases: 'error', head: null },
+  cached: false,
+  reason: 'network',
+  error: null,
+}
+FIXTURES['homepage/dsh'] = dshFailure
+FIXTURES['homepage/dshCheck'] = dshFailure
+FIXTURES['homepage/dshLocal'] = { root: '', versions: [] }
+api.close()
+tree = await settle(main.render, { t })
+api.open('dsh')
+tree = await settle(main.render, { t })
+const dshFailurePane = byClass(tree, 'ph-focus-card')[0]
+const dshFailureText = text(dshFailurePane)
+assert.ok(dshFailureText.includes(t('dsh.reason.network')),
+  'a failed upstream must name the network, not just say unreadable, got: ' + dshFailureText)
+assert.ok(dshFailureText.includes(t('dsh.needRoot')),
+  'an unidentified root must be explained in the detail, got: ' + dshFailureText)
+assert.ok(!dshFailureText.includes(t('dsh.unknown')),
+  'the old unreadable wording must be gone, got: ' + dshFailureText)
+
+// Refresh from the detail so both halves re-read the failure fixture, then
+// close it: the compact preview is what a user sees on the wall.
+const dshFailureCaret = elements(tree).find((node) => hasClass(node, 'ph-combo-caret'))
+dshFailureCaret.props.onClick()
+tree = await settle(main.render, { t })
+const dshFailureRefresh = elements(tree).find((node) => hasClass(node, 'ph-combo-item') && textOf(node).trim() === t('common.refresh'))
+dshFailureRefresh.props.onClick()
+tree = await settle(main.render, { t })
+api.close()
+tree = await settle(main.render, { t })
+const dshFailureCell = byClass(tree, 'ph-cell').find((cell) => cell.props['data-card-cell'] === 'dsh')
+const dshFailurePreview = text(dshFailureCell)
+assert.ok(dshFailurePreview.includes(t('dsh.reason.network')), 'the preview names the network failure, got: ' + dshFailurePreview)
+assert.ok(dshFailurePreview.includes(t('dsh.row.unresolved')), 'the preview names the unidentified root, got: ' + dshFailurePreview)
+assert.ok(byClass(dshFailureCell, 'ph-spec-value--error').length >= 2, 'both upstream rows are marked as failed readings')
+assert.ok(byClass(dshFailureCell, 'ph-link').some((node) => textOf(node).trim() === t('dsh.retry')),
+  'the preview offers a retry instead of only a dead end')
+
+FIXTURES['homepage/dsh'] = dshOriginal
+FIXTURES['homepage/dshCheck'] = dshCheckOriginal
+FIXTURES['homepage/dshLocal'] = dshLocalOriginal
+
+// --- the local row is the RUNNING core, not the newest directory on disk ----
+// The wall lists every build under the root. Calling the newest one "current"
+// would be a lie while this page is served by an older checkout, so the Host
+// says which directory it was started from and the card must follow it.
+const dshRunningLocal = Object.assign({}, DSH_LOCAL_FIXTURE, {
+  running: DSH_LOCAL_FIXTURE.versions[1].dir,
+})
+FIXTURES['homepage/dsh'] = DSH_FIXTURE
+FIXTURES['homepage/dshCheck'] = DSH_FIXTURE
+FIXTURES['homepage/dshLocal'] = dshRunningLocal
+api.close()
+tree = await settle(main.render, { t })
+api.open('dsh')
+tree = await settle(main.render, { t })
+const runningCaret = elements(tree).find((node) => hasClass(node, 'ph-combo-caret'))
+runningCaret.props.onClick()
+tree = await settle(main.render, { t })
+const runningRefresh = elements(tree).find((node) => hasClass(node, 'ph-combo-item') && textOf(node).trim() === t('common.refresh'))
+runningRefresh.props.onClick()
+tree = await settle(main.render, { t })
+const runningPane = byClass(tree, 'ph-focus-card')[0]
+assert.equal(
+  byClass(runningPane, 'ph-chip').filter((node) => textOf(node).trim() === t('dsh.runningChip')).length,
+  1,
+  'the expanded list marks exactly the running core',
+)
+api.close()
+tree = await settle(main.render, { t })
+const runningCell = byClass(tree, 'ph-cell').find((cell) => cell.props['data-card-cell'] === 'dsh')
+const runningSpec = byClass(runningCell, 'ph-spec')
+  .find((spec) => textOf(byClass(spec, 'ph-spec-name')[0]).trim() === t('dsh.row.local'))
+assert.equal(textOf(byClass(runningSpec, 'ph-spec-value')[0]).trim(), '5719020',
+  'the local row names the running checkout, not the newest one on disk')
+
+FIXTURES['homepage/dsh'] = dshOriginal
+FIXTURES['homepage/dshCheck'] = dshCheckOriginal
+FIXTURES['homepage/dshLocal'] = dshLocalOriginal
+
+// --- a packaged Desktop is running, not a local build -----------------------
+// The card must show the running Desktop version, say that this surface manages
+// local builds, and state that installing here does NOT update the Desktop app.
+const dshDesktopLocal = {
+  root: '',
+  running: '',
+  versions: [{
+    version: '0.2.1-alpha.4', name: 'DeepSeek Harness (Desktop)', kind: 'desktop',
+    dir: null, sha: null, short: null, commitDate: null, branch: null,
+    tag: 'dsh-v0.2.1-alpha.4', tags: [], remote: null, shallow: false,
+    exists: true, hasSource: false, hasDeps: false, hasBuild: true, complete: true,
+    updatedAt: null, isCore: true,
+  }],
+}
+FIXTURES['homepage/dsh'] = DSH_FIXTURE
+FIXTURES['homepage/dshCheck'] = DSH_FIXTURE
+FIXTURES['homepage/dshLocal'] = dshDesktopLocal
+api.close()
+tree = await settle(main.render, { t })
+api.open('dsh')
+tree = await settle(main.render, { t })
+const desktopCaret = elements(tree).find((node) => hasClass(node, 'ph-combo-caret'))
+desktopCaret.props.onClick()
+tree = await settle(main.render, { t })
+const desktopRefresh = elements(tree).find((node) => hasClass(node, 'ph-combo-item') && textOf(node).trim() === t('common.refresh'))
+desktopRefresh.props.onClick()
+tree = await settle(main.render, { t })
+const desktopPane = byClass(tree, 'ph-focus-card')[0]
+const desktopText = text(desktopPane)
+assert.ok(desktopText.includes('v0.2.1-alpha.4'),
+  'the local section shows the running Desktop version, got: ' + desktopText)
+assert.ok(desktopText.includes(t('dsh.desktopNote')),
+  'a Desktop run must explain that installing creates a local build, got: ' + desktopText)
+assert.ok(desktopText.includes(t('dsh.noLocalBuilds')),
+  'the Desktop core is not counted as a local build, got: ' + desktopText)
+assert.ok(desktopText.includes(t('dsh.installLocal', { version: DSH_FIXTURE.release.name })),
+  'the install action says it creates a local build, got: ' + desktopText)
+api.close()
+tree = await settle(main.render, { t })
+
+FIXTURES['homepage/dsh'] = dshOriginal
+FIXTURES['homepage/dshCheck'] = dshCheckOriginal
+FIXTURES['homepage/dshLocal'] = dshLocalOriginal
 
 // ------------------------------------------------------------- sidebar icon
 

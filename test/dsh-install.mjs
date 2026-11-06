@@ -20,6 +20,8 @@ import { dirname, join, parse as parsePath, resolve, sep } from 'node:path'
 import {
   buildShellScript,
   defaultInstallRoot,
+  defaultRunningCore,
+  desktopCore,
   installTarget,
   listInstalled,
   planInstall,
@@ -1013,6 +1015,63 @@ function fakeGitRunner(byDir, calls) {
     base,
     'the lowercase spelling a hand clone uses is recognised too',
   )
+  assert.equal(
+    defaultInstallRoot({ env: {}, argv: ['node', join(base, 'deepseek-harness', 'packages', 'cli', 'lib', 'index.js')], cwd: join(base, 'deepseek-harness') }),
+    base,
+    'the repository\'s documented clone name (with a hyphen) is a core directory',
+  )
+  assert.equal(
+    defaultInstallRoot({
+      env: {},
+      argv: ['node', join(base, 'resources', 'runtime', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js')],
+      cwd: join(base, 'profiles', 'desktop'),
+    }),
+    '',
+    'a packaged Desktop has no install root to infer from its launch path',
+  )
+  assert.equal(
+    defaultRunningCore({ argv: ['node', entry], cwd: join(base, 'unrelated') }),
+    core,
+    'the running core is the core directory above the CLI entry',
+  )
+  assert.equal(
+    defaultRunningCore({
+      argv: ['node', join(base, 'deepseek-harness', 'packages', 'cli', 'lib', 'index.js')],
+      cwd: base,
+    }),
+    join(base, 'deepseek-harness'),
+    'a hyphenated clone reports the directory that is actually running',
+  )
+  assert.equal(
+    defaultRunningCore({
+      argv: ['node', join(base, 'resources', 'runtime', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js')],
+      cwd: join(base, 'profiles', 'desktop'),
+    }),
+    '',
+    'a packaged Desktop has no core directory; its version comes from the launcher',
+  )
+}
+
+// --------------------------------------------------------------- desktopCore
+
+/**
+ * A packaged Desktop ships the core inside the application bundle, so the
+ * version the launcher passes to the Host is the only local reading there is.
+ * A build without that variable must stay silent instead of inventing a core.
+ */
+{
+  const entry = desktopCore({ env: { DSH_CLIENT_VERSION: '0.2.2-rc.1' } })
+  assert.ok(entry, 'a Desktop build reports its bundled core')
+  assert.equal(entry.kind, 'desktop', 'the entry says where the reading came from')
+  assert.equal(entry.version, '0.2.2-rc.1', 'the version is the build version')
+  assert.equal(entry.tag, 'dsh-v0.2.2-rc.1', 'the tag is the one the GitHub release uses')
+  assert.equal(entry.sha, null, 'a packaged bundle has no commit to report')
+  assert.equal(entry.isCore, true, 'the card lists it as a core')
+  assert.equal(entry.hasBuild, true, 'a running packaged core is built by definition')
+  assert.equal(desktopCore({ env: {} }), null, 'a local build has no Desktop version to report')
+  assert.equal(desktopCore({ env: { DSH_CLIENT_VERSION: '   ' } }), null, 'a blank version is not a reading')
+  assert.equal(desktopCore({ env: { DSH_CLIENT_VERSION: 'v0.2.2-rc.1' } }).version, '0.2.2-rc.1',
+    'a leading v is accepted and normalised away')
 }
 
 console.log('dsh-install: all assertions passed')
