@@ -169,7 +169,7 @@ endpoints marked —.
 | `overview` / `refresh` | `{historyDays, force}` / — | Balance, today's spend, history, account state; `refresh` forces a resample first. |
 | `environment` / `device` | — | Platform, Node, cwd, proxy/TLS/redirector variables; CPU, memory, GPU/VRAM, temperature, disk, system info, sample history. |
 | `dsh` / `dshCheck` | — | Upstream commit and release, read routes and cache state / re-reads upstream past the TTL. |
-| `dshLocal` / `dshInstall` | `{root?}` / `{root?, version, ref}` | `{root, versions}` of unpacked cores; launch result of a detached core install. An empty root means the auto-detected install root. |
+| `dshLocal` / `dshInstall` | `{root?}` / `{root?, version, ref}` | `{root, running, versions, install}` of unpacked cores; launch result of a detached core install. An empty root means the auto-detected install root. `install` reports how this core was installed — `{kind: 'source' \| 'desktop' \| 'package' \| 'unknown', version: string \| null}` — where `source` is a local checkout, `desktop` the official desktop app, `package` a distributed package and `unknown` none of those. |
 | `sidebarLayout` / `saveSidebarLayout` | — / `{layout}` | The workspace-group document `{layout, at}`, and its saved form. |
 | `state` / `saveState` | — / `{patch}` | Persisted UI state; and the state after applying a patch. |
 | `collect` / `act` | `{names?, force?}` / `{action, payload}` | Collector snapshot `{at, entries}`; action result `{ok, action, value}` or `{ok: false, action, error}`. |

@@ -668,6 +668,10 @@ const DSH_FIXTURE = {
 // exactly on the upstream commit, one is a day behind (and was never built), and
 // one is not a DSH checkout at all.
 const DSH_LOCAL_FIXTURE = {
+  // How this DSH was installed. The card asks the host before it says anything
+  // about the upstream: a checkout is the one installation it can update.
+  install: { kind: 'source', version: null },
+  running: 'D:\\tools\\DSH\\deepseekharness021a3',
   root: 'D:\\tools\\DSH',
   versions: [
     {
@@ -1872,16 +1876,16 @@ assert.equal(byClass(tree, 'ph-glass').length, 11, 'each card must carry the fro
 // and is exercised by the custom card further down.
 assert.equal(byClass(tree, 'ph-sheen').length, 0, 'no shipped card may render the sheen sweep')
 
-// The DSH preview: where the default branch is, which release is current, and
-// which core this machine actually has unpacked — the verdict compares the local
-// checkout's commit against the upstream head, so it cannot call a box that is a
-// day behind "up to date".
+// The DSH preview: what the upstream is at, what this machine runs, and the one
+// verdict that compares the two. The card is a tool for local source builds, so
+// the verdict is about the commit this box has unpacked — a card that only read
+// the upstream could not tell "up to date" from "this box is a day behind".
 const dshCell = byClass(tree, 'ph-cell').find((cell) => cell.props['data-card-cell'] === 'dsh')
 assert.ok(dshCell, 'the dsh card must render')
 const dshPreview = text(dshCell)
 assert.ok(dshPreview.includes('86a4022'), 'the preview must name the commit, got: ' + dshPreview)
 assert.ok(dshPreview.includes(DSH_FIXTURE.release.name), 'the preview must name the release, got: ' + dshPreview)
-assert.equal(byClass(dshCell, 'ph-spec').length, 3, 'the dsh preview is three rows: the commit, the release, the local core')
+assert.equal(byClass(dshCell, 'ph-spec').length, 2, 'the dsh preview is two rows: the upstream release and this machine')
 const dshLocalSpec = byClass(dshCell, 'ph-spec')
   .find((spec) => textOf(byClass(spec, 'ph-spec-name')[0]).trim() === t('dsh.row.local'))
 assert.ok(dshLocalSpec, 'the preview must have a row for the core installed here')
@@ -1889,9 +1893,10 @@ assert.equal(textOf(byClass(dshLocalSpec, 'ph-spec-value')[0]).trim(), '86a4022'
   'the local row must name the commit this box is on')
 assert.equal(byClass(dshLocalSpec, 'ph-spec-value')[0].props.title, 'deepseekharness021a3',
   'the local row must say which directory that commit came from')
-assert.equal(byClass(dshCell, 'ph-chip').length, 0, 'the dsh preview states its verdict as a link, not a chip')
-assert.ok(byClass(dshCell, 'ph-dsh-state').length === 1, 'the verdict must be one element')
-assert.ok(!hasClass(byClass(dshCell, 'ph-dsh-state')[0], 'is-new'), 'a core sitting on the upstream commit is not news')
+const dshPreviewChip = byClass(dshCell, 'ph-chip')[0]
+assert.ok(dshPreviewChip, 'the preview states its verdict in one chip')
+assert.ok(hasClass(dshPreviewChip, 'ph-chip--ok'),
+  'a core sitting on the upstream commit is not news, got: ' + textOf(dshPreviewChip))
 assert.ok(text(dshCell).includes(t('dsh.state.current')), 'the newest local core is on the upstream commit, got: ' + dshPreview)
 
 
@@ -4335,13 +4340,19 @@ const dshPane = byClass(tree, 'ph-focus-card')[0]
 assert.equal(dshPane.props['data-card-focus'], 'dsh', 'the dsh card must expand')
 let dshText = text(dshPane)
 assert.ok(dshText.includes(t('dsh.state.current')), 'the newest core is on the upstream commit, got: ' + dshText)
+// The card says what it is FOR before it says anything about the upstream: a
+// machine that does not run a local build has to learn that from the card
+// itself, not from a failure it cannot act on.
+assert.ok(dshText.includes(t('dsh.purpose')), 'the expanded card must state its purpose, got: ' + dshText)
+assert.equal(byClass(dshPane, 'ph-dsh-launch').length, 1, 'the purpose and the state share one panel')
+assert.equal(byClass(dshPane, 'ph-dsh-reading').length, 2, 'the panel carries the two readings')
 assert.ok(dshText.includes(DSH_FIXTURE.head.sha), 'the detail shows the full head sha')
 assert.ok(dshText.includes(DSH_FIXTURE.head.message), 'the detail shows the commit message')
 assert.ok(dshText.includes(DSH_FIXTURE.release.tag), 'the detail shows the tag the installer needs')
 assert.ok(dshText.includes(DSH_FIXTURE.release.name), 'the detail shows the release name the user reads')
 assert.ok(dshText.includes('master'), 'the detail names the branch')
 assert.equal(byClass(dshPane, 'ph-tool').length, 3, 'every core under the root earns a row')
-assert.equal(byClass(dshPane, 'ph-chip').length, 1 + 5 + 1, 'the upstream verdict, a running marker, and a sync chip plus a build chip per local core')
+assert.equal(byClass(dshPane, 'ph-chip').length, 1 + 3 + 3, 'the verdict, a running marker, and a sync chip plus a build chip per local core')
 assert.equal(byClass(dshPane, 'ph-input').length, 1, 'the install root is an editable field')
 assert.ok(dshText.includes('5719020') && dshText.includes('dsh-v0.2.1-alpha.3'),
   'a core is identified by its commit and the tag it is on, got: ' + dshText)
@@ -4349,7 +4360,18 @@ assert.ok(dshText.includes(t('dsh.synced')), 'the core on the upstream commit mu
 assert.ok(dshText.includes(t('dsh.behind')), 'a core on an older commit must read as behind')
 assert.ok(dshText.includes(t('dsh.noCommit')), 'a directory that is not a checkout must say so')
 assert.ok(dshText.includes(t('dsh.notBuilt')), 'a checkout without its build must say so')
+// The raw feed is a disclosure, not a wall of text: the panel leads, and the
+// commit and release details follow only when they are asked for.
+const dshReveal = byClass(dshPane, 'ph-dsh-reveal')[0]
+assert.ok(dshReveal, 'the upstream details sit behind a disclosure')
+assert.equal(dshReveal.props.hidden, true, 'the disclosure starts closed')
 dumpPreview(tree, '09-expanded-dsh')
+const dshMore = byClass(dshPane, 'ph-dsh-more')[0]
+assert.ok(dshMore, 'the disclosure needs a control')
+dshMore.props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(byClass(byClass(tree, 'ph-focus-card')[0], 'ph-dsh-reveal')[0].props.hidden, false,
+  'the disclosure opens on request')
 
 FIXTURES['homepage/dsh'] = DSH_NEWER
 FIXTURES['homepage/dshCheck'] = DSH_NEWER
@@ -4361,10 +4383,12 @@ assert.ok(dshRefresh(), 'the dsh card must offer a manual refresh')
 dshRefresh().props.onClick()
 tree = await settle(main.render, { t })
 const dshNewer = byClass(tree, 'ph-focus-card')[0]
-assert.ok(text(dshNewer).includes(t('dsh.state.release', { name: DSH_NEWER.release.name })),
+assert.ok(text(dshNewer).includes(t('dsh.state.release')),
   'a release the card has not seen is the news it exists for, got: ' + text(dshNewer))
+assert.ok(text(dshNewer).includes(DSH_NEWER.release.name),
+  'the new release must be named where the user reads it, got: ' + text(dshNewer))
 const dshWarnChips = byClass(dshNewer, 'ph-chip--warn').map((node) => textOf(node).trim())
-assert.ok(dshWarnChips.some((text) => text.includes(t('dsh.state.release', { name: DSH_NEWER.release.name }))),
+assert.ok(dshWarnChips.some((text) => text.includes(t('dsh.state.release'))),
   'a new release must be flagged, not merely stated, got: ' + dshWarnChips.join(' | '))
 
 // "Force" is not a second spelling of "refresh": the host memoises the document
@@ -4400,6 +4424,86 @@ assert.ok(text(byClass(tree, 'ph-focus-card')[0]).includes(t('dsh.started', { ve
 api.clearNotifications('dsh')
 FIXTURES['homepage/dsh'] = DSH_FIXTURE
 FIXTURES['homepage/dshCheck'] = DSH_FIXTURE
+tree = await settle(main.render, { t })
+
+// --- the DSH card on a machine it was not written for ------------------------
+// The reports that started this redesign came from users of the desktop app
+// and of community wrappers: the card showed a red "cannot reach github" and
+// no build to manage, and they read it as a broken plugin. On a packaged DSH
+// there is nothing to update, so the card has to say so in its own voice —
+// and must not dress that up as an error.
+const DSH_PACKAGED_FIXTURE = {
+  root: '',
+  running: '',
+  install: { kind: 'desktop', version: '0.2.1-alpha.4' },
+  versions: [
+    {
+      version: '0.2.1-alpha.4', name: 'DeepSeek Harness (Desktop)', dir: null,
+      sha: null, short: null, commitDate: null, branch: null, tag: 'dsh-v0.2.1-alpha.4',
+      remote: null, shallow: false, isCore: true, exists: true, hasSource: false,
+      hasDeps: false, hasBuild: true, complete: true, updatedAt: null, kind: 'desktop',
+    },
+  ],
+}
+FIXTURES['homepage/dshLocal'] = DSH_PACKAGED_FIXTURE
+api.close()
+api.open('dsh')
+tree = await settle(main.render, { t })
+// The fixture changed, and a card only re-reads when it is asked to: the
+// refresh control fires every reloader the card published, the wall preview's
+// included.
+dshCaret().props.onClick()
+tree = await settle(main.render, { t })
+dshRefresh().props.onClick()
+tree = await settle(main.render, { t })
+// The wall is the surface a user meets first, and the one that was reported
+// as broken: the compact reading of a machine the card is not about.
+api.close()
+tree = await settle(main.render, { t })
+dumpPreview(tree, '01-wall-packaged')
+const packagedCell = byClass(tree, 'ph-cell').find((cell) => cell.props['data-card-cell'] === 'dsh')
+const packagedText = text(packagedCell)
+const packagedChip = byClass(packagedCell, 'ph-chip')[0]
+assert.ok(packagedChip, 'the preview still states one verdict')
+assert.ok(!hasClass(packagedChip, 'ph-chip--error'), 'a packaged build is a state, not an error')
+assert.ok(!hasClass(packagedChip, 'ph-chip--warn'), 'a packaged build is not a warning either')
+assert.ok(packagedText.includes(t('dsh.state.packaged')), 'the preview must say the card does not apply here, got: ' + packagedText)
+assert.ok(packagedText.includes(t('dsh.scope.hint')), 'the preview must say what the card is for, got: ' + packagedText)
+assert.ok(!api.snapshot().notifications.dsh, 'a machine the card is not about raises no bubble')
+
+api.open('dsh')
+tree = await settle(main.render, { t })
+const packagedPane = byClass(tree, 'ph-focus-card')[0]
+const packagedDetail = text(packagedPane)
+assert.ok(packagedDetail.includes(t('dsh.scope.packaged', { version: 'v0.2.1-alpha.4' })),
+  'the expanded card must say this machine is not a local build, got: ' + packagedDetail)
+assert.ok(packagedDetail.includes(t('dsh.purpose')), 'the expanded card must still state its purpose')
+assert.ok(!packagedDetail.includes(t('dsh.state.current')), 'a packaged build must never claim to be up to date')
+assert.equal(byClass(packagedPane, 'ph-tool').length, 0, 'a packaged build has no local build to manage')
+// What the card does offer is labelled for what it is: a local build in a
+// directory of the user's choosing, not an upgrade of the running app.
+const packagedButton = elements(packagedPane).find((node) => hasClass(node, 'ph-btn') && textOf(node).includes(DSH_FIXTURE.release.name))
+assert.ok(packagedButton, 'a packaged build can still be given a local build')
+assert.notEqual(textOf(packagedButton), t('dsh.install', { version: DSH_FIXTURE.release.name }),
+  'the action must not read as an upgrade of the running app, got: ' + textOf(packagedButton))
+assert.ok(packagedDetail.includes(t('dsh.note.local')), 'the card must say the running version is left alone')
+dumpPreview(tree, '09-expanded-dsh-packaged')
+
+// A machine the host could not place at all gets its own sentence, and still
+// no red: the card asks for a directory instead of claiming a fault.
+FIXTURES['homepage/dshLocal'] = { root: '', running: '', install: { kind: 'unknown', version: null }, versions: [] }
+dshCaret().props.onClick()
+tree = await settle(main.render, { t })
+dshRefresh().props.onClick()
+tree = await settle(main.render, { t })
+const unknownCell = byClass(tree, 'ph-cell').find((cell) => cell.props['data-card-cell'] === 'dsh')
+const unknownText = text(unknownCell)
+assert.ok(unknownText.includes(t('dsh.state.unknownInstall')), 'the card must say it found no local build, got: ' + unknownText)
+assert.ok(!hasClass(byClass(unknownCell, 'ph-chip')[0], 'ph-chip--error'), 'an unidentified machine is not an error')
+FIXTURES['homepage/dshLocal'] = DSH_LOCAL_FIXTURE
+dshCaret().props.onClick()
+tree = await settle(main.render, { t })
+dshRefresh().props.onClick()
 tree = await settle(main.render, { t })
 
 // The next block drives the device card through the caret of whatever card is
@@ -5427,7 +5531,7 @@ const dshFailure = {
 }
 FIXTURES['homepage/dsh'] = dshFailure
 FIXTURES['homepage/dshCheck'] = dshFailure
-FIXTURES['homepage/dshLocal'] = { root: '', versions: [] }
+FIXTURES['homepage/dshLocal'] = { root: '', running: '', install: { kind: 'source', version: null }, versions: [] }
 api.close()
 tree = await settle(main.render, { t })
 api.open('dsh')
@@ -5436,10 +5540,10 @@ const dshFailurePane = byClass(tree, 'ph-focus-card')[0]
 const dshFailureText = text(dshFailurePane)
 assert.ok(dshFailureText.includes(t('dsh.reason.network')),
   'a failed upstream must name the network, not just say unreadable, got: ' + dshFailureText)
+assert.ok(dshFailureText.includes(t('dsh.state.offline')),
+  'the card must say the upstream is out of reach, got: ' + dshFailureText)
 assert.ok(dshFailureText.includes(t('dsh.needRoot')),
   'an unidentified root must be explained in the detail, got: ' + dshFailureText)
-assert.ok(!dshFailureText.includes(t('dsh.unknown')),
-  'the old unreadable wording must be gone, got: ' + dshFailureText)
 
 // Refresh from the detail so both halves re-read the failure fixture, then
 // close it: the compact preview is what a user sees on the wall.
@@ -5453,9 +5557,20 @@ api.close()
 tree = await settle(main.render, { t })
 const dshFailureCell = byClass(tree, 'ph-cell').find((cell) => cell.props['data-card-cell'] === 'dsh')
 const dshFailurePreview = text(dshFailureCell)
-assert.ok(dshFailurePreview.includes(t('dsh.reason.network')), 'the preview names the network failure, got: ' + dshFailurePreview)
-assert.ok(dshFailurePreview.includes(t('dsh.row.unresolved')), 'the preview names the unidentified root, got: ' + dshFailurePreview)
-assert.ok(byClass(dshFailureCell, 'ph-spec-value--error').length >= 2, 'both upstream rows are marked as failed readings')
+// The preview is the surface that was reported as broken: a network that
+// cannot reach GitHub is a state of the machine, so it is a muted reading and
+// a chip — never a red row that looks like a fault in the plugin.
+const dshFailureRow = byClass(dshFailureCell, 'ph-spec')
+  .find((spec) => textOf(byClass(spec, 'ph-spec-name')[0]).trim() === t('dsh.row.upstream'))
+assert.ok(dshFailureRow, 'the preview must still have an upstream row')
+assert.equal(byClass(dshFailureRow, 'ph-spec-value')[0].props.title, t('dsh.reason.network'),
+  'the preview must say why the upstream is unreadable')
+assert.equal(byClass(dshFailureCell, 'ph-spec-value--error').length, 0,
+  'a failed read is not painted as an error')
+assert.ok(byClass(dshFailureCell, 'ph-spec-value--muted').length >= 1,
+  'the unreadable reading is muted, not loud')
+assert.ok(byClass(dshFailureCell, 'ph-chip--warn').some((node) => textOf(node).trim() === t('dsh.state.offline')),
+  'the preview states the upstream is unreachable')
 assert.ok(byClass(dshFailureCell, 'ph-link').some((node) => textOf(node).trim() === t('dsh.retry')),
   'the preview offers a retry instead of only a dead end')
 
@@ -5532,12 +5647,16 @@ const desktopPane = byClass(tree, 'ph-focus-card')[0]
 const desktopText = text(desktopPane)
 assert.ok(desktopText.includes('v0.2.1-alpha.4'),
   'the local section shows the running Desktop version, got: ' + desktopText)
-assert.ok(desktopText.includes(t('dsh.desktopNote')),
+assert.ok(desktopText.includes(t('dsh.scope.packaged', { version: 'v0.2.1-alpha.4' })),
+  'a Desktop run must be told that the card does not apply to it, got: ' + desktopText)
+assert.ok(desktopText.includes(t('dsh.note.local')),
   'a Desktop run must explain that installing creates a local build, got: ' + desktopText)
-assert.ok(desktopText.includes(t('dsh.noLocalBuilds')),
-  'the Desktop core is not counted as a local build, got: ' + desktopText)
-assert.ok(desktopText.includes(t('dsh.installLocal', { version: DSH_FIXTURE.release.name })),
+assert.equal(byClass(desktopPane, 'ph-tool').length, 0,
+  'the Desktop core is not counted as a local build')
+assert.ok(desktopText.includes(t('dsh.install.local', { version: DSH_FIXTURE.release.name })),
   'the install action says it creates a local build, got: ' + desktopText)
+assert.ok(!desktopText.includes(t('dsh.state.current')),
+  'a packaged build must never claim to be up to date')
 api.close()
 tree = await settle(main.render, { t })
 

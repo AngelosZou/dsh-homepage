@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.7] — 2026-11-10
+
+### Changed
+- The DSH core card performs better.
+
 ## [0.1.6] — 2026-11-06
 
 ### Changed

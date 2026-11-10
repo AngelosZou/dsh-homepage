@@ -22,6 +22,7 @@ import {
   defaultInstallRoot,
   defaultRunningCore,
   desktopCore,
+  installKind,
   installTarget,
   listInstalled,
   planInstall,
@@ -61,6 +62,7 @@ function posixEnv(extra = {}) {
 {
   for (const [name, fn] of Object.entries({
     buildShellScript,
+    installKind,
     installTarget,
     listInstalled,
     planInstall,
@@ -70,7 +72,7 @@ function posixEnv(extra = {}) {
   })) {
     assert.equal(typeof fn, 'function', name + ' is exported')
   }
-  console.log('  exports: the seven contract functions are exported')
+  console.log('  exports: the eight contract functions are exported')
 }
 
 // ------------------------------------------------------------ sanitizeVersion
@@ -1072,6 +1074,73 @@ function fakeGitRunner(byDir, calls) {
   assert.equal(desktopCore({ env: { DSH_CLIENT_VERSION: '   ' } }), null, 'a blank version is not a reading')
   assert.equal(desktopCore({ env: { DSH_CLIENT_VERSION: 'v0.2.2-rc.1' } }).version, '0.2.2-rc.1',
     'a leading v is accepted and normalised away')
+}
+
+// --------------------------------------------------------------- installKind
+
+/**
+ * The Host has to be able to say how this DSH was installed. The card used to
+ * guess, and a guess turned a packaged Desktop or a community wrapper into a
+ * red "cannot reach GitHub" state, so the four answers are decided by the
+ * evidence in order: the launcher's own version, a core checkout, a
+ * `node_modules` segment, and nothing at all.
+ */
+{
+  const base = resolve(parsePath(tmpdir()).root, 'ph-install-kind')
+  const core = join(base, 'DeepSeekHarness-v0.9.9')
+  const entry = join(core, 'packages', 'cli', 'lib', 'index.js')
+  const wrapper = join(base, 'wrapper', 'node_modules', '@deepseek-ai', 'dsh-core', 'lib', 'index.js')
+  const plain = join(base, 'plain', 'index.js')
+
+  assert.equal(
+    installKind({ env: { DSH_CLIENT_VERSION: '0.2.2-rc.1' }, argv: ['node', entry], cwd: core }),
+    'desktop',
+    'the launcher version wins over everything else: a packaged Desktop runs from node_modules too',
+  )
+  assert.equal(
+    installKind({ env: { DSH_CLIENT_VERSION: '   ' }, argv: ['node', entry], cwd: core }),
+    'source',
+    'a blank launcher version is no reading at all, so the checkout answers',
+  )
+  assert.equal(
+    installKind({ env: {}, argv: ['node', entry], cwd: core }),
+    'source',
+    'a core checkout is a local source build',
+  )
+  assert.equal(
+    installKind({ env: {}, argv: ['node', wrapper], cwd: join(base, 'wrapper') }),
+    'package',
+    'a core that came from npm is a package, not a source build',
+  )
+  assert.equal(
+    installKind({ env: {}, argv: ['node', plain], cwd: join(base, 'wrapper', 'node_modules') }),
+    'package',
+    'the cwd alone is enough to say the core was installed from npm',
+  )
+  assert.equal(
+    installKind({ env: {}, argv: ['node', plain], cwd: join(base, 'plain') }),
+    'unknown',
+    'no core directory and no node_modules says nothing about the install',
+  )
+  assert.equal(
+    installKind({
+      env: {},
+      argv: ['node', join(base, 'wrapper', 'node_modules', 'deepseek-harness', 'packages', 'cli', 'lib', 'index.js')],
+      cwd: join(base, 'wrapper'),
+    }),
+    'package',
+    'a core directory inside node_modules is an installed package, not a checkout',
+  )
+  assert.equal(
+    installKind({ env: {}, argv: [], cwd: '' }),
+    'unknown',
+    'an empty environment is a refusal, not a guess',
+  )
+  assert.ok(
+    ['desktop', 'source', 'package', 'unknown'].includes(installKind()),
+    'the default reading answers with one of the four kinds',
+  )
+  console.log('  installKind: Desktop, checkout, npm package and the unknown case are told apart')
 }
 
 console.log('dsh-install: all assertions passed')
