@@ -740,13 +740,23 @@ const WORKSPACE_SNAPSHOT = {
 const SESSION_BASE = Date.now()
 const SESSION_LIST = {
   byId: {
-    's-1': { title: '重构测试', running: true, updatedAt: SESSION_BASE - 60000 },
+    's-1': { title: '重构测试', running: true, updatedAt: SESSION_BASE - 60000, cwd: 'D:\\\\Lab\\\\demo' },
     's-2': { blank: true, retainedBy: { mainView: 1 }, updatedAt: SESSION_BASE - 120000 },
-    's-5': { title: '会议记录', updatedAt: SESSION_BASE - 10800000 },
-    's-3': { title: '发布检查', updatedAt: SESSION_BASE - 600000 },
-    's-4': { title: '归档笔记', updatedAt: SESSION_BASE - 172800000 },
+    's-5': { title: '会议记录', updatedAt: SESSION_BASE - 10800000, cwd: 'D:\\\\Lab\\\\demo' },
+    's-3': { title: '发布检查', updatedAt: SESSION_BASE - 600000, cwd: 'D:\\\\Work\\\\app' },
+    's-4': { title: '归档笔记', updatedAt: SESSION_BASE - 172800000, cwd: 'D:\\\\Notes' },
   },
 }
+
+// The shell's own keyboard registry, as the core publishes it: the three
+// session commands a row menu prints keycaps for. The plugin binds no command
+// of its own — the core owns those ids — so this catalog is the only place a
+// hint or a key handler may take a binding from.
+const SHORTCUT_CATALOG = [
+  { id: 'session.rename', keys: ['Ctrl', '+', 'Alt', '+', 'G'], aria: 'Control+Alt+G', binding: { code: 'KeyG', modifiers: ['control', 'alt'] } },
+  { id: 'session.fork', keys: ['Ctrl', '+', 'Shift', '+', 'F'], aria: 'Control+Shift+F', binding: { code: 'KeyF', modifiers: ['control', 'shift'] } },
+  { id: 'session.archive', keys: ['Ctrl', '+', 'Alt', '+', 'A'], aria: 'Control+Alt+A', binding: { code: 'KeyA', modifiers: ['control', 'alt'] } },
+]
 
 // The grouping document, already written once: two groups, two projects in them,
 // one project loose, and one assignment the sidebar no longer lists (its
@@ -1507,9 +1517,23 @@ const shippedServices = {
   sessions: stubService('sessions', {
     fork: () => null,
     search: (query) => SEARCH_HITS[query] || [],
+    // The real `using` hands the callback a reference to the Session; the
+    // rename lives on the session the reference binds, which is the call a
+    // rename has to reach.
     using: (id, options, consumer) => {
-      if (typeof consumer === 'function') consumer({ rename: () => Promise.resolve() })
-      return null
+      if (typeof consumer === 'function') {
+        consumer({
+          binding: {
+            session: {
+              rename: (title) => {
+                recordService('sessions', 'rename', [id, title])
+                return Promise.resolve({ ok: true })
+              },
+            },
+          },
+        })
+      }
+      return Promise.resolve({ ok: true })
     },
   }),
   uiWorkspace: stubService('uiWorkspace', {
@@ -1519,6 +1543,18 @@ const shippedServices = {
     pickDirectory: () => 'D:\\Picked\\fresh',
     archiveSession: () => null,
     unarchiveSession: () => null,
+    pinSession: () => null,
+    unpinSession: () => null,
+  }),
+  // The shell's shortcut registry: a row reads the effective binding for a
+  // command out of its catalog rather than inventing one of its own.
+  shortcuts: {
+    catalog: { getSnapshot: () => SHORTCUT_CATALOG, subscribe: () => () => {} },
+  },
+  // The Session remote namespace, under the name the shell provides it as: the
+  // one call a "show in folder" needs.
+  'remote.session': stubService('remoteSession', {
+    openWorkspacePath: () => ({ opened: true }),
   }),
   // The shell's own sidebar service. The region draws an icon-only shape while
   // the sidebar is narrow, so widening it is the one control that is not the
@@ -2476,22 +2512,31 @@ assert.equal(serviceCallsTo('workspaces', 'delete').length, 0, 'merely opening t
 sbNodes(asked, 'confirmOk')[0].props.onClick()
 assert.deepEqual(lastServiceCall('workspaces', 'delete').args, ['w-lab'], 'confirming removes the project through the shipped service')
 
-// A session row's menu is the shipped set: rename, fork, copy the id, archive.
-// There is deliberately no pin entry — pinning lives in the host's own row menu.
-// The row is picked by id: the draft at the top of its project is a different
-// row, and these are the calls that need a session that exists on the host.
+// A session row's menu is the shipped set, in the shipped order: pin, rename,
+// fork, the id, the session's folder, and the archive toggle. The row is
+// picked by id: the draft at the top of its project is a different row, and
+// these are the calls that need a session that exists on the host.
 const runningSession = sessionRowById(await settle(region), 's-1')
 const sessionMenuTree = await openRowMenu(runningSession, 'sessionMenu')
 const sessionMenu = byClass(sessionMenuTree, 'ui-menu')[0]
 assert.deepEqual(
   menuItemIds(sessionMenu),
-  ['rename', 'fork', 'copyId', 'archive'],
-  'the session menu is rename, fork, copy id and archive, got: ' + menuItemIds(sessionMenu).join(','),
+  ['pin', 'rename', 'fork', 'copyId', 'reveal', 'archive'],
+  'the session menu is pin, rename, fork, copy id, reveal and archive, got: ' + menuItemIds(sessionMenu).join(','),
 )
-assert.ok(
-  !menuItemIds(sessionMenu).some((id) => id === 'pin' || id === 'unpin'),
-  'the region must not offer a pin the host owns',
-)
+
+// The keycaps beside a command are the core's own binding, read out of the
+// shortcut catalog, not one the region invented; a command the core does not
+// bind prints none at all.
+const menuRow = (tree, id) => elements(tree).find((node) => node.props['role'] === 'menuitem' && node.props['data-id'] === id)
+assert.equal(menuRow(sessionMenu, 'rename').props['data-shortcut'], 'Ctrl + Alt + G', 'rename prints the core binding')
+assert.equal(menuRow(sessionMenu, 'fork').props['data-shortcut'], 'Ctrl + Shift + F', 'fork prints the core binding')
+assert.equal(menuRow(sessionMenu, 'archive').props['data-shortcut'], 'Ctrl + Alt + A', 'archive prints the core binding')
+assert.equal(menuRow(sessionMenu, 'pin').props['data-shortcut'], undefined, 'pin is not a core command, so it claims no key')
+
+// pin is the uiWorkspace call, named after the row's current state.
+elements(sessionMenu).find((node) => node.props['data-id'] === 'pin').props.onClick({})
+assert.deepEqual(lastServiceCall('uiWorkspace', 'pinSession').args, ['s-1'], 'pinning goes through uiWorkspace')
 
 // fork carries the session id as an object, the shape the client service takes.
 elements(sessionMenu).find((node) => node.props['data-id'] === 'fork').props.onClick({})
@@ -2508,6 +2553,57 @@ assert.equal(UI_PRIMITIVES.writeClipboard.last, 's-1', 'and it copies the row\'s
 const archiveMenuTree = await openRowMenu(sessionRowById(await settle(region), 's-1'), 'sessionMenu')
 elements(byClass(archiveMenuTree, 'ui-menu')[0]).find((node) => node.props['data-id'] === 'archive').props.onClick({})
 assert.deepEqual(lastServiceCall('uiWorkspace', 'archiveSession').args, ['s-1'], 'archiving goes through uiWorkspace')
+
+// reveal asks the host to open the session's own folder — the call the shipped
+// menu makes for "show in folder", with the directory the projection carried.
+const revealMenuTree = await openRowMenu(sessionRowById(await settle(region), 's-1'), 'sessionMenu')
+elements(byClass(revealMenuTree, 'ui-menu')[0]).find((node) => node.props['data-id'] === 'reveal').props.onClick({})
+assert.deepEqual(
+  lastServiceCall('remoteSession', 'openWorkspacePath').args,
+  [{ path: SESSION_LIST.byId['s-1'].cwd, action: 'reveal' }],
+  'revealing hands the host the session folder and the reveal action',
+)
+
+// The row's hover cluster is the shipped row's: the menu trigger, then the
+// archive button, then the pin button — the order the shipped sidebar draws
+// them in, and reachable without opening the menu.
+const hoverRow = sessionRowById(await settle(region), 's-1')
+const hoverCluster = byClass(hoverRow, 'ph-sb-actions')[0]
+assert.ok(hoverCluster, 'the session row draws its action cluster')
+assert.deepEqual(
+  elements(hoverCluster)
+    .filter((node) => node.props['data-sb'] === 'sessionArchive' || node.props['data-sb'] === 'sessionPin')
+    .map((node) => node.props['data-sb']),
+  ['sessionArchive', 'sessionPin'],
+  'the cluster is archive then pin',
+)
+assert.equal(sbNodes(hoverRow, 'sessionArchive')[0].props['aria-label'], t('sidebar.session.archive'), 'the archive button names what it does')
+assert.equal(sbNodes(hoverRow, 'sessionPin')[0].props['aria-label'], t('sidebar.session.pin'), 'the pin button names what it does')
+sbNodes(hoverRow, 'sessionPin')[0].props.onClick({ stopPropagation() {} })
+assert.deepEqual(lastServiceCall('uiWorkspace', 'pinSession').args, ['s-1'], 'the hover pin button pins that row')
+sbNodes(hoverRow, 'sessionArchive')[0].props.onClick({ stopPropagation() {} })
+assert.deepEqual(lastServiceCall('uiWorkspace', 'archiveSession').args, ['s-1'], 'the hover archive button archives that row')
+
+// A command the core binds to a key belongs to the row that holds the focus:
+// the row claims the gesture (preventDefault is what tells the core's own
+// global copy to stand down) and runs it against its own session.
+const keyRow = sessionRowById(await settle(region), 's-1')
+let prevented = 0
+keyRow.props.onKeyDown({
+  code: 'KeyA',
+  key: 'a',
+  ctrlKey: true,
+  altKey: true,
+  shiftKey: false,
+  metaKey: false,
+  preventDefault: () => { prevented += 1 },
+})
+assert.equal(prevented, 1, 'the archive gesture is claimed by the focused row')
+assert.deepEqual(lastServiceCall('uiWorkspace', 'archiveSession').args, ['s-1'], 'and it archives the row that was focused')
+// A gesture one modifier away is a different command and is left alone.
+const otherRow = sessionRowById(await settle(region), 's-1')
+otherRow.props.onKeyDown({ code: 'KeyA', key: 'a', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false, preventDefault: () => { prevented += 1 } })
+assert.equal(prevented, 1, 'an unbound gesture is not consumed')
 
 // A new session in a project is the row's own button, not a menu entry.
 sbNodes(rowNamed(await settle(region), 'demo'), 'newSession')[0].props.onClick({ stopPropagation() {} })

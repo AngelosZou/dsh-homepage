@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.8] — 2026-11-14
+
+### Added
+- Left sidebar carries the DSH-native actions in the shipped order.
+
+### Fixed
+- Renaming a session from the sidebar reaches the session again.
+
 ## [0.1.7] — 2026-11-10
 
 ### Changed
