@@ -1463,8 +1463,9 @@ function lastServiceCall(service, method) {
 }
 
 /** Arm the next call to one method to fail the way a dead host fails. */
-function failNextAction(service, method) {
-  SERVICE_FAILURES.push(service + '.' + method)
+function failNextAction(service, method, error) {
+  const key = service + '.' + method
+  SERVICE_FAILURES.push({ key, error: error ?? new Error('boom from ' + key) })
 }
 
 /**
@@ -1478,10 +1479,11 @@ function stubService(service, outcomes) {
   const stub = {}
   for (const method of Object.keys(outcomes)) {
     stub[method] = function (...args) {
-      const armed = SERVICE_FAILURES.indexOf(service + '.' + method)
+      const armed = SERVICE_FAILURES.findIndex((entry) => entry.key === service + '.' + method)
       if (armed !== -1) {
-        SERVICE_FAILURES.splice(armed, 1)
-        throw new Error('boom from ' + service + '.' + method)
+        const [failure] = SERVICE_FAILURES.splice(armed, 1)
+        if (method === 'delete') return Promise.reject(failure.error)
+        throw failure.error
       }
       recordService(service, method, args)
       return Promise.resolve(outcomes[method](...args))
@@ -2147,7 +2149,18 @@ assert.ok(
 
 const region = surface.sidebar.projects()
 assert.equal(typeof region, 'function', 'the grouped region must be reachable for a render test')
-let regionTree = await settle(region)
+let regionTree
+let tickSidebar
+const realSetInterval = globalThis.setInterval
+try {
+  globalThis.setInterval = (callback, delay, ...args) => {
+    if (delay === 30000) tickSidebar = callback
+    return realSetInterval(callback, delay, ...args)
+  }
+  regionTree = await settle(region)
+} finally {
+  globalThis.setInterval = realSetInterval
+}
 // The document exactly as the host answered it, before any test edits it. The
 // preview at the end of this block puts it back, so what is rendered for the eye
 // is the region at rest rather than the region after eleven edits.
@@ -2180,15 +2193,11 @@ assert.equal(sbNodes(regionTree, 'groupToggle').length, 2, 'only a real group ca
 const projectRows = sbNodes(regionTree, 'project')
 assert.deepEqual(
   projectRows.map((node) => node.props['data-ws']),
-  ['w-lab', 'w-gone', 'w-work', 'w-notes'],
-  'the three reported projects plus the stale assignment the document still remembers',
+  ['w-lab', 'w-work', 'w-notes'],
+  'only the three projects in the live list are actionable',
 )
 assert.ok(projectRows.every((node) => node.props.role === 'treeitem'), 'a project row is a treeitem')
-assert.deepEqual(
-  projectRows.filter((node) => hasClass(node, 'is-orphan')).map((node) => node.props['data-ws']),
-  ['w-gone'],
-  'the project the sidebar no longer reports is marked and still removable',
-)
+assert.ok(surface.sidebar.members(surface.sidebar.snapshot().layout)['w-gone'], 'rendering does not delete stale assignments from the manager')
 
 // Only the project the focused Session lives in opens by itself. The shipped
 // browser opens the group holding the current Session and remembers every other
@@ -2210,6 +2219,18 @@ const sessionStates = sbNodes(regionTree, 'state')
 assert.equal(sessionStates.length, 3, 'every drawn session row carries its state dot')
 assert.ok(!hasClass(sessionStates[0], 'is-run'), 'the current session is a draft, so its dot is at rest')
 assert.ok(hasClass(sessionStates[1], 'is-run'), 'a running session paints its dot')
+const sessionAge = (tree) => text(byClass(sessionRowById(tree, 's-1'), 'ph-sb-meta')[0])
+const oldAge = sessionAge(regionTree)
+const realNow = Date.now
+assert.equal(typeof tickSidebar, 'function', 'the grouped sidebar owns an idle clock')
+try {
+  Date.now = () => realNow() + 24 * 60 * 60 * 1000
+  tickSidebar()
+  assert.notEqual(sessionAge(await settle(region)), oldAge, 'idle ticks advance relative times without a host update')
+} finally {
+  Date.now = realNow
+  tickSidebar()
+}
 assert.equal(sbNodes(regionTree, 'empty').length, 0, 'a loaded document is not the empty state')
 assert.equal(sbNodes(regionTree, 'pending').length, 0, 'a ready projection is not pending')
 assert.equal(sbNodes(regionTree, 'searching').length, 0, 'and nothing is searching')
@@ -2230,8 +2251,8 @@ assert.ok(!regionText.includes('发布检查'), 'a project the reader has not op
 assert.ok(regionText.includes(t('sidebar.session.new')), 'a blank session is labelled as a new one')
 
 // The heading counts sessions, not the projects drawn under it. The fixture
-// makes the two readings differ on purpose: 实验室 holds two projects (one of
-// them stale and empty) and three sessions, so a heading that read 2 would be
+// makes the two readings differ on purpose: 实验室 holds one live project
+// and three sessions, so a heading that read 1 would be
 // counting the wrong thing.
 const labHeading = sections[0]
 assert.ok(
@@ -2240,7 +2261,7 @@ assert.ok(
 )
 assert.equal(
   sbNodes(labHeading, 'project').length,
-  2,
+  1,
   'the projects it lists are drawn under it, so that is one number it must not print',
 )
 assert.ok(text(sections[1]).includes(t('sidebar.list.count', { count: 1 })), 'the other group counts its own session')
@@ -2323,7 +2344,7 @@ assert.equal(sessionsUnder(collapsedTree, 'w-work').length, 0, 'collapsing hides
 assert.equal(sessionsUnder(collapsedTree, 'w-lab').length, 3, 'and only that group\'s')
 assert.deepEqual(
   sbNodes(collapsedTree, 'project').map((node) => node.props['data-ws']),
-  ['w-lab', 'w-gone', 'w-notes'],
+  ['w-lab', 'w-notes'],
   'the folded group draws no project rows and the others are unchanged',
 )
 await sleep(520)
@@ -2744,6 +2765,8 @@ await feedReporter({
   useWorkspaces: (select) => select(WORKSPACE_SNAPSHOT),
   useSessions: (select) => select(SESSION_LIST),
 })
+assert.ok(!sbNodes(await settle(region), 'project').some((node) => node.props['data-ws'] === 'w-fresh'),
+  'once the host lists a workspace, its removal cannot bring back the create bridge')
 surface.sidebar.mutate((live) => {
   const members = Object.assign({}, live.members)
   delete members['w-fresh']
@@ -2773,6 +2796,17 @@ assert.equal(
   false,
   'the group unfolds so the project it just received is on screen',
 )
+assert.ok(sbNodes(await settle(region), 'project').some((node) => node.props['data-ws'] === 'w-fresh'),
+  'the second create has a temporary row even without a host list update')
+try {
+  Date.now = () => realNow() + 60000
+  tickSidebar()
+  assert.ok(!sbNodes(await settle(region), 'project').some((node) => node.props['data-ws'] === 'w-fresh'),
+    'a host-confirmed create that never reaches the workspace list expires')
+} finally {
+  Date.now = realNow
+  tickSidebar()
+}
 
 const renameGroupTree = await openRowMenu(sbNodes(await settle(region), 'section')[0], 'groupMenu')
 elements(byClass(renameGroupTree, 'ui-menu')[0]).find((node) => node.props['data-id'] === 'rename').props.onClick({})
@@ -2838,7 +2872,7 @@ surface.sidebar.mutate(() => layoutAtRest)
 const atRestOrder = sbNodes(await settle(region), 'project').map((node) => node.props['data-ws'])
 assert.deepEqual(
   atRestOrder,
-  ['w-lab', 'w-gone', 'w-work', 'w-notes'],
+  ['w-lab', 'w-work', 'w-notes'],
   'the options below start from the document as the region was first handed it, got: ' + atRestOrder.join(','),
 )
 
@@ -2856,10 +2890,21 @@ assert.ok(
   sheet.includes('.ph-sb{flex:1 1 auto;display:flex;flex-direction:column'),
   'and the shell fills that height instead of growing to its content',
 )
-// Every box between the element and the scrolling list has to pass the height on;
-// one link that sizes to its content stops the chain there and the list grows
-// instead of scrolling. The measured render (preview/12-sidebar-scroll-check.png)
-// is the same story from the browser's side: scrollHeight 426 vs clientHeight 180.
+assert.ok(
+  sheet.includes('@container (height > 0px){homepage-sidebar{flex:none;height:auto;max-height:100cqh}'),
+  'the expanded shell uses its size container, not a percentage of the content-sized slot',
+)
+assert.ok(
+  sheet.includes('homepage-sidebar:has(.ph-sb-bar-search.is-open){height:100cqh}'),
+  'a short or empty search does not shrink the scroll viewport',
+)
+assert.ok(
+  sheet.includes('@container (height > 0px){.ph-sb-list{overscroll-behavior:auto}}')
+    && sheet.includes('@container scroll-state(scrollable: bottom){.ph-sb-list{overflow-y:hidden}}')
+    && /\.ph-sb-list\{[^}]*overscroll-behavior:contain/.test(sheet),
+  'the new shell hands off scrolling; the legacy shell keeps its original containment',
+)
+// Every box between the element and the scrolling list has to pass the height on.
 for (const link of [
   '.ph-sb-body{flex:1 1 auto;display:flex;flex-direction:column',
   '.ph-sb-scroll{position:relative;flex:1 1 auto;min-height:0',
@@ -2881,8 +2926,7 @@ assert.ok(
 // A project the sidebar lists no sessions under has nothing to unfold, so it
 // gets no fold control: a caret there is a button that cannot do anything, which
 // is what "some projects cannot be expanded" looks like from the reader's side.
-const staleRow = projectByWs(await settle(region), 'w-gone')
-assert.equal(sbNodes(staleRow, 'projectToggle').length, 0, 'a project with no sessions carries no fold control')
+assert.equal(projectByWs(await settle(region), 'w-gone'), undefined, 'a missing project has no row or action controls')
 assert.equal(sbNodes(projectByWs(await settle(region), 'w-lab'), 'projectToggle').length, 1, 'a project with sessions keeps it')
 
 // The colour marker: the menu offers the document's own palette plus the way to
@@ -2937,7 +2981,7 @@ surface.sidebar.mutate((live) => Object.assign({}, live, {
 const listedBefore = sbNodes(await settle(region), 'project').map((node) => node.props['data-ws'])
 assert.deepEqual(
   listedBefore,
-  ['w-lab', 'w-notes', 'w-gone', 'w-work'],
+  ['w-lab', 'w-notes', 'w-work'],
   'the section lists its projects in the order the sidebar reported, got: ' + listedBefore.join(','),
 )
 const pinTree = await openRowMenu(projectByWs(await settle(region), 'w-notes'), 'projectMenu')
@@ -2952,7 +2996,7 @@ assert.equal(
 )
 assert.deepEqual(
   sbNodes(await settle(region), 'project').map((node) => node.props['data-ws']),
-  ['w-notes', 'w-lab', 'w-gone', 'w-work'],
+  ['w-notes', 'w-lab', 'w-work'],
   'a pinned project leads its own section',
 )
 assert.equal(
@@ -2972,16 +3016,14 @@ assert.equal(
 )
 assert.deepEqual(
   sbNodes(await settle(region), 'project').map((node) => node.props['data-ws']),
-  ['w-lab', 'w-notes', 'w-gone', 'w-work'],
+  ['w-lab', 'w-notes', 'w-work'],
   'and the section goes back to the order it was listed in',
 )
 
 // Sorting by modification time. The listing above is already newest first, so
 // the reporter is asked for one where it is not — the oldest project first,
 // inside the same group — because only then does the order the region draws
-// prove which rule produced it. (`w-gone` stays as the section's stale
-// assignment, so the shelf below it is the document's own record, not a project
-// the sidebar still reports.)
+// prove which rule produced it.
 const oldestFirst = Object.assign({}, WORKSPACE_SNAPSHOT, {
   items: [WORKSPACE_SNAPSHOT.items[2], WORKSPACE_SNAPSHOT.items[0], WORKSPACE_SNAPSHOT.items[1]],
 })
@@ -2992,7 +3034,7 @@ await feedReporter({
 const listed = sbNodes(await settle(region), 'project').map((node) => node.props['data-ws'])
 assert.deepEqual(
   listed,
-  ['w-notes', 'w-lab', 'w-gone', 'w-work'],
+  ['w-notes', 'w-lab', 'w-work'],
   'with no sort the section keeps the order the sidebar listed, got: ' + listed.join(','),
 )
 const sortTree = await openRowMenu(sectionByKey(await settle(region), 'lab'), 'groupMenu')
@@ -3008,7 +3050,7 @@ assert.equal(
 const sorted = sbNodes(await settle(region), 'project').map((node) => node.props['data-ws'])
 assert.deepEqual(
   sorted,
-  ['w-lab', 'w-notes', 'w-gone', 'w-work'],
+  ['w-lab', 'w-notes', 'w-work'],
   'newest first inside the section, got: ' + sorted.join(','),
 )
 const unsortTree = await openRowMenu(sectionByKey(await settle(region), 'lab'), 'groupMenu')
@@ -3023,7 +3065,7 @@ assert.equal(
 )
 assert.deepEqual(
   sbNodes(await settle(region), 'project').map((node) => node.props['data-ws']),
-  ['w-notes', 'w-lab', 'w-gone', 'w-work'],
+  ['w-notes', 'w-lab', 'w-work'],
   'and the listing order is back',
 )
 // Put the fixture back: the rest of the block reads the document and the
@@ -3246,6 +3288,37 @@ assert.ok(
 sbNodes(failedTree, 'session').filter((node) => node.props['data-id'] === 's-1')[0].props.onClick({})
 assert.equal(sbNodes(await settle(region), 'actionError').length, 0, 'the failure line clears when the next action succeeds')
 
+// Only a definitive Host not-found error hides a workspace; neither the saved
+// grouping nor a session-only update should bring the rejected row back.
+const staleLayout = surface.sidebar.snapshot().layout
+const clickDemo = async () => rowNamed(await settle(region), 'demo').props.onClick({})
+failNextAction('uiWorkspace', 'openWorkspace')
+await clickDemo()
+assert.ok(rowNamed(await settle(region), 'demo'), 'an ordinary failure does not hide a live workspace')
+failNextAction('uiWorkspace', 'openWorkspace', Object.assign(new Error('workspace is gone'), { rpcError: { code: 'workspace/not-found' } }))
+await clickDemo()
+let rejectedTree = await settle(region)
+assert.equal(rowNamed(rejectedTree, 'demo'), undefined, 'a not-found from openWorkspace removes the stale row')
+assert.ok(text(sbNodes(rejectedTree, 'actionError')[0]).includes('workspace is gone'))
+assert.equal(surface.sidebar.snapshot().layout, staleLayout, 'rejecting a stale workspace does not edit the saved layout')
+await feedReporter({ useSessions: (select) => select({ ...SESSION_LIST }) })
+assert.equal(rowNamed(await settle(region), 'demo'), undefined, 'session updates cannot resurrect the stale workspace')
+const noDemo = { ...WORKSPACE_SNAPSHOT, items: WORKSPACE_SNAPSHOT.items.slice(1) }
+const publishNoDemo = () => feedReporter({ useWorkspaces: (select) => select(noDemo), useSessions: (select) => select(SESSION_LIST) })
+await publishNoDemo()
+await feedReporter({ useSessions: (select) => select(SESSION_LIST) })
+const rejectedDeleteMenu = await openRowMenu(rowNamed(await settle(region), 'demo'), 'projectMenu')
+elements(rejectedDeleteMenu).find((node) => node.props.role === 'menuitem' && node.props['data-id'] === 'remove').props.onClick({})
+failNextAction('workspaces', 'delete', new Error('workspace delete failed: workspace/not-found: workspace is gone'))
+sbNodes(await settle(region), 'confirmOk')[0].props.onClick()
+rejectedTree = await settle(region)
+assert.equal(rowNamed(rejectedTree, 'demo'), undefined, 'the wrapped not-found from delete also removes the stale row')
+assert.ok(text(sbNodes(rejectedTree, 'actionError')[0]).includes('workspace is gone'))
+await publishNoDemo()
+await feedReporter({ useSessions: (select) => select(SESSION_LIST) })
+await clickDemo()
+assert.equal(sbNodes(await settle(region), 'actionError').length, 0, 'clear the action failure before testing the layout error')
+
 // A projection that cannot be read is a different state: the failure line plus a
 // retry that re-reads, not a blank region.
 //
@@ -3320,7 +3393,7 @@ assert.ok(calls.some((call) => call.endpoint === 'homepage/saveSidebarLayout'), 
 // from the folder the reader settles on — instead of leaving the entry dead.
 const regionDir = region
 const dirArmedAt = SERVICE_FAILURES.length
-SERVICE_FAILURES.push('uiWorkspace.pickDirectory')
+failNextAction('uiWorkspace', 'pickDirectory')
 const dirLevels = []
 shippedServices.uiWorkspace.listDirectory = (path) => {
   dirLevels.push(path)
@@ -3435,7 +3508,7 @@ try {
   // typed path is the target, resolved by the Host so the workspace stores its
   // canonical spelling. Typing a folder and clicking the confirm is one gesture;
   // it must not need a second one to be believed.
-  SERVICE_FAILURES.push('uiWorkspace.pickDirectory')
+  failNextAction('uiWorkspace', 'pickDirectory')
   const noEnterAddTree = await openRowMenu(await settle(regionDir), 'add')
   elements(byClass(byClass(noEnterAddTree, 'ph-sb-wide')[0], 'ui-menu')[0])
     .find((node) => node.props['data-id'] === 'newProject').props.onClick({})
@@ -3733,11 +3806,9 @@ await feedReporter({
 })
 const recentTree = await settle(region)
 const labOrder = sbNodes(sectionByKey(recentTree, 'lab'), 'project').map((node) => node.props['data-ws'])
-// w-gone is a member the fixture knows but the projection reports no sessions
-// for, so it has no last-sent session at all and trails both real projects.
 assert.deepEqual(
   labOrder,
-  ['w-notes', 'w-lab', 'w-gone'],
+  ['w-notes', 'w-lab'],
   'a group ordered by recency ranks a project by its last sent session, so a Draft cannot make its project recent, got: ' + labOrder.join(', '),
 )
 assert.ok(
@@ -5766,6 +5837,55 @@ const icon = settle(sidebar.render, { size: 18, active: true })
 const iconTree = await icon
 assert.ok(text(iconTree) !== undefined, 'the sidebar icon must render')
 assert.ok(elements(iconTree).length >= 1, 'the sidebar icon must be a real element')
+
+// The live controller path must work without ever mounting the icon.
+function observable(initial) {
+  let value = initial
+  const subscribers = new Set()
+  return {
+    getSnapshot: () => value,
+    subscribe(fn) { subscribers.add(fn); return () => subscribers.delete(fn) },
+    publish(next) { value = next; for (const fn of subscribers) fn() },
+    listenerCount: () => subscribers.size,
+  }
+}
+const liveWorkspaces = observable(WORKSPACE_SNAPSHOT)
+const liveSessions = observable(SESSION_LIST)
+const liveStatus = observable(new Map())
+const liveContext = {
+  ...mockCtx,
+  get(name) {
+    if (name === 'workspaces') return { ...shippedServices.workspaces, list: liveWorkspaces }
+    if (name === 'sessions') return { ...shippedServices.sessions, list: liveSessions }
+    if (name === 'uiSession') return { sessionStatus: liveStatus }
+    return mockCtx.get(name)
+  },
+  effect(fn, label) {
+    const cleanup = fn()
+    if (label === 'dsh-homepage: sidebar live sources') disposeLive = cleanup
+    return cleanup
+  },
+}
+let disposeLive
+module_.apply(liveContext)
+const liveState = () => surface.sidebar.snapshot()
+assert.deepEqual(liveState().workspaces.map((item) => item.id), ['w-lab', 'w-work', 'w-notes'])
+assert.equal(liveState().current, 's-2')
+liveWorkspaces.publish({ ...WORKSPACE_SNAPSHOT, items: [WORKSPACE_SNAPSHOT.items[0], WORKSPACE_SNAPSHOT.items[0]] })
+assert.equal(liveState().workspaces.length, 1, 'workspace removal and duplicate IDs are reflected without the icon')
+await feedReporter({ useSessions: (select) => select(SESSION_LIST) })
+assert.equal(liveState().workspaces.length, 1, 'the compatibility reporter cannot replace controller data')
+liveSessions.publish({ byId: { 's-1': { title: 'live', retainedBy: { mainView: 1 } } } })
+assert.equal(liveState().current, 's-1')
+assert.equal(liveState().workspaces[0].rows.map((row) => row.id).join(','), 's-1', 'IDs without a summary are not rendered')
+assert.equal(liveState().workspaces[0].rows[0].running, false)
+liveStatus.publish(new Map([['s-1', { running: true }]]))
+assert.equal(liveState().workspaces[0].rows[0].running, true)
+disposeLive()
+assert.equal(liveState().workspaces, null)
+assert.deepEqual([liveWorkspaces, liveSessions, liveStatus].map((entry) => entry.listenerCount()), [0, 0, 0])
+liveWorkspaces.publish(WORKSPACE_SNAPSHOT)
+assert.equal(liveState().workspaces, null, 'disposed sources cannot repopulate the projection')
 
 // --------------------------------------------------------------------- report
 
