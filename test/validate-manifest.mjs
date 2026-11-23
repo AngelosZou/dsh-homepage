@@ -84,7 +84,9 @@ if (typeof patch === 'string') ok(existsSync(join(root, patch)), `dsh.bundle.pat
 const client = manifest.dsh?.client
 ok(client && typeof client === 'object', 'dsh.client is missing: the browser half would never be served')
 ok(client?.platform === 'web', `dsh.client.platform is "${client?.platform}", expected "web"`)
-ok(Array.isArray(client?.inject) && client.inject.length > 0, 'dsh.client.inject must list the Harness packages the factory requires')
+ok(Array.isArray(client?.inject) && client.inject.includes('@deepseek-ai/dsh-client-ui-session-status'),
+  'dsh.client.inject must list the provider of the session status service and hook')
+ok(manifest.engines?.dsh === '>=0.2.3-alpha.2', 'engines.dsh must enforce the split session-status API boundary')
 
 // ------------------------------------------------------------------ files list
 

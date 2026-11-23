@@ -25,7 +25,8 @@ dsh plugin --profile web add dsh-homepage
 ## 运行要求
 
 - **Node.js >= 22.19**
-- **DSH 0.2.x**
+- **DSH `0.2.3-alpha.2` 或更新版本**：使用 `dsh-homepage` `0.1.11` 或更新版本。
+- **DSH `0.2.2` 或更早版本**：保留 `0.1.10`，或执行 `dsh plugin --profile web add dsh-homepage@0.1.10` 显式安装。
 
 ## 卡片
 

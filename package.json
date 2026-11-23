@@ -1,6 +1,6 @@
 {
   "name": "dsh-homepage",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "DeepSeek Harness plugin: a personal home page in the sidebar for a DSH instance. Review a plugin before installing it, and read sessions, projects, tool usage, device, storage, DSH cores, Skills and cost from one composable, registrable card wall.",
   "keywords": [
     "dsh-plugin",
@@ -67,12 +67,14 @@
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-runtime"
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-session-status"
       ]
     }
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.3-alpha.2"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"

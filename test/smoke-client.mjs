@@ -6032,7 +6032,13 @@ const liveContext = {
   get(name) {
     if (name === 'workspaces') return { ...shippedServices.workspaces, list: liveWorkspaces }
     if (name === 'sessions') return { ...shippedServices.sessions, list: liveSessions }
-    if (name === 'uiSession') return { sessionStatus: liveStatus }
+    if (name === 'uiSession') {
+      return { get sessionStatus() { throw new Error('use the injected uiSession.sessionStatus service') } }
+    }
+    if (name === 'uiSession.sessionStatus') {
+      assert.ok(module_.inject.includes(name), `cannot get property ${JSON.stringify(name)} without inject`)
+      return liveStatus
+    }
     return mockCtx.get(name)
   },
   effect(fn, label) {

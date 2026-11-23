@@ -32,7 +32,8 @@ complete the installation.
 ## Requirements
 
 - **Node.js >= 22.19**
-- **DSH 0.2.x**
+- **DSH `0.2.3-alpha.2` or later** for `dsh-homepage` `0.1.11` and later.
+- On DSH `0.2.2` or older, keep `0.1.10` or install it explicitly with `dsh plugin --profile web add dsh-homepage@0.1.10`.
 
 ## Cards
 
