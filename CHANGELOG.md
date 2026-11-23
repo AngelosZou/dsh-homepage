@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.10] — 2026-11-23
+
+### Added
+- The home-page header checks the npm release of the plugin once a day and turns
+  into a new-version pill when the published copy has moved ahead.
+
 ## [0.1.9] — 2026-11-19
 
 ### Fixed

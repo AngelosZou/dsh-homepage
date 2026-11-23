@@ -196,9 +196,9 @@ const contribution = provided.typertContribution
 assert(contribution && Array.isArray(contribution.invocations), 'a typert contribution was registered')
 equal(contribution.package, 'dsh-homepage', 'contribution package')
 equal(contribution.face, 'host', 'contribution face')
-equal(contribution.invocations.length, 29, 'twenty-nine remote invocations')
+equal(contribution.invocations.length, 31, 'thirty-one remote invocations')
 const methods = contribution.invocations.map((entry) => entry.method).sort().join(',')
-equal(methods, 'act,collect,device,dsh,dshCheck,dshInstall,dshLocal,environment,hygiene,overview,pluginAuditDecide,pluginAuditList,pluginAuditModels,pluginAuditStart,pluginAuditStatus,projects,refresh,saveSidebarLayout,saveState,sidebarLayout,skillContent,skillDetail,skillInstall,skillList,skillSearch,skillSetEnabled,skillSources,state,toolUsage', 'invocation methods')
+equal(methods, 'act,collect,device,dsh,dshCheck,dshInstall,dshLocal,environment,hygiene,overview,pluginAuditDecide,pluginAuditList,pluginAuditModels,pluginAuditStart,pluginAuditStatus,pluginRelease,pluginUpdate,projects,refresh,saveSidebarLayout,saveState,sidebarLayout,skillContent,skillDetail,skillInstall,skillList,skillSearch,skillSetEnabled,skillSources,state,toolUsage', 'invocation methods')
 for (const entry of contribution.invocations) {
   equal(typeof api[entry.method], 'function', 'the declared endpoint has a callable service method: ' + entry.method)
   equal(entry.namespace, 'homepage', 'invocation namespace for ' + entry.method)
@@ -215,6 +215,12 @@ equal(overviewCall.parameters[0].name, 'options', 'overview takes options')
 const auditModelsCall = contribution.invocations.find((entry) => entry.method === 'pluginAuditModels')
 equal(auditModelsCall.id, 'dsh-homepage#homepage/pluginAuditModels', 'audit models descriptor id')
 equal(auditModelsCall.parameters.map((entry) => entry.name).join(','), 'options', 'audit models accepts the useRemote options envelope')
+const releaseCall = contribution.invocations.find((entry) => entry.method === 'pluginRelease')
+equal(releaseCall.id, 'dsh-homepage#homepage/pluginRelease', 'release descriptor id')
+equal(releaseCall.parameters.map((entry) => entry.name).join(','), 'options', 'release check accepts the one options envelope')
+const updateCall = contribution.invocations.find((entry) => entry.method === 'pluginUpdate')
+equal(updateCall.id, 'dsh-homepage#homepage/pluginUpdate', 'update descriptor id')
+equal(updateCall.parameters.map((entry) => entry.name).join(','), 'options', 'update accepts the one options envelope')
 equal(JSON.stringify(await api.pluginAuditModels({})), JSON.stringify({
   models: [{ provider: 'review', model: 'review-model', name: 'Review model', efforts: [{ id: 'deep', name: 'Deep' }] }],
   defaultSelection: auditDefault,

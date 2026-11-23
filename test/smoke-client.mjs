@@ -1222,11 +1222,57 @@ const RUNS_FIXTURE = {
   ],
 }
 
+const RELEASE_CURRENT_FIXTURE = {
+  at: 1795500000000,
+  current: '0.1.9',
+  latest: '0.1.9',
+  updateAvailable: false,
+  ahead: false,
+  checkedAt: 1795496400000,
+  fromCache: true,
+  cacheAgeMs: 3600000,
+  registry: 'npm',
+  publishedAt: '2026-11-19T13:14:06.474Z',
+  repo: 'AngelosZou/dsh-homepage',
+  repoUrl: 'https://github.com/AngelosZou/dsh-homepage',
+  npmUrl: 'https://www.npmjs.com/package/dsh-homepage',
+  changelog: null,
+  changelogError: null,
+  install: { kind: 'registry', updatable: true, reason: null },
+  error: null,
+  errorCode: null,
+}
+
+const RELEASE_NEWER_FIXTURE = Object.assign({}, RELEASE_CURRENT_FIXTURE, {
+  latest: '0.2.0',
+  updateAvailable: true,
+  checkedAt: 1795500000000,
+  fromCache: false,
+  cacheAgeMs: null,
+  publishedAt: '2026-11-23T05:10:00.000Z',
+  changelog: {
+    version: '0.2.0',
+    date: '2026-11-23',
+    source: 'https://raw.githubusercontent.com/AngelosZou/dsh-homepage/v0.2.0/CHANGELOG.md',
+    groups: [
+      { title: 'Added', items: ['The header checks npm once a day for a newer plugin release and opens the changelog on click.'] },
+      { title: 'Changed', items: ['The update panel lists the current and latest versions, the GitHub repository and the npm page.'] },
+      { title: 'Fixed', items: ['A failed check keeps the last known answer and offers a retry.'] },
+    ],
+  },
+})
+
+const RELEASE_LOCAL_FIXTURE = Object.assign({}, RELEASE_NEWER_FIXTURE, {
+  install: { kind: 'local', updatable: false, reason: 'local' },
+})
+
 const FIXTURES = {
   'homepage/state': STATE_FIXTURE,
   'homepage/saveState': { updatedAt: '2026-10-14T15:00:01.000Z' },
   'homepage/refresh': OVERVIEW_FIXTURE,
   'homepage/overview': OVERVIEW_FIXTURE,
+  'homepage/pluginRelease': RELEASE_CURRENT_FIXTURE,
+  'homepage/pluginUpdate': { ok: true, code: 'ok', from: '0.1.9', to: '0.2.0', step: 'install', application: 'applied', restartRequired: false, error: null, warnings: [] },
   'homepage/environment': ENVIRONMENT_FIXTURE,
   'homepage/device': DEVICE_FIXTURE,
   'homepage/hygiene': HYGIENE_FIXTURE,
@@ -1311,7 +1357,7 @@ const DESCRIPTOR_IDS = Object.keys(DESCRIPTOR_PARAMS).sort()
 const SHIPPED_ENDPOINTS = [
   'homepage/device', 'homepage/dsh', 'homepage/dshCheck', 'homepage/dshInstall',
   'homepage/dshLocal', 'homepage/environment', 'homepage/hygiene', 'homepage/overview',
-  'homepage/projects', 'homepage/refresh',
+  'homepage/pluginRelease', 'homepage/pluginUpdate', 'homepage/projects', 'homepage/refresh',
   'homepage/saveSidebarLayout', 'homepage/saveState', 'homepage/sidebarLayout',
   'homepage/state',
 ]
@@ -1349,6 +1395,16 @@ assert.deepEqual(
   DESCRIPTOR_PARAMS['homepage/pluginAuditDecide'].slice().sort(),
   ['options'],
   'the audit decision endpoint takes the one options object the card sends',
+)
+assert.deepEqual(
+  DESCRIPTOR_PARAMS['homepage/pluginRelease'].slice().sort(),
+  ['options'],
+  'the release check endpoint takes the one options object the header sends',
+)
+assert.deepEqual(
+  DESCRIPTOR_PARAMS['homepage/pluginUpdate'].slice().sort(),
+  ['options'],
+  'the update endpoint takes the one options object the header sends',
 )
 
 // ------------------------------------------------------------------- mock ctx
@@ -1844,6 +1900,11 @@ assert.deepEqual(
   'cells must render in registry order',
 )
 assert.equal(byClass(tree, 'ph-toolbar').length, 1, 'the toolbar must render')
+const releaseChip = byClass(tree, 'ph-release')[0]
+assert.ok(releaseChip, 'the toolbar must carry the plugin release chip')
+assert.equal(releaseChip.props['data-release-chip'], 'current', 'an up-to-date plugin renders the quiet chip')
+assert.ok(text(releaseChip).includes('v0.1.9'), 'the quiet chip names the running version, got: ' + text(releaseChip))
+assert.equal(byClass(tree, 'ph-release-panel').length, 0, 'the release panel is closed until the chip is pressed')
 
 const tokens = byClass(tree, 'ph-hero')
 // The token and network previews share the one-glance hero. The device card
@@ -2076,6 +2137,120 @@ assert.ok(!networkText.includes('secret'), 'the network card must not leak crede
 const layoutOf = (id) => byClass(tree, 'ph-cell').find((cell) => cell.props['data-card-cell'] === id).props.style
 assert.equal(layoutOf('token').gridColumn, 'span 2', 'the token card registers a 2-column default')
 dumpPreview(tree, '01-wall')
+
+// --- the plugin release chip ------------------------------------------------
+// The header keeps one reading: the running version while nothing has moved,
+// a tinted pill when npm has a newer one. The panel is a portal popover, so the
+// chip itself is the only anchor and the panel is asserted from the full tree.
+const releaseAnchor = {
+  currentTarget: {
+    getBoundingClientRect: () => ({ left: 183, top: 16, right: 395, bottom: 44, width: 212, height: 28 }),
+  },
+}
+function clickReleaseChip() {
+  const chip = byClass(tree, 'ph-release')[0]
+  assert.ok(chip, 'the release chip must exist')
+  chip.props.onClick(releaseAnchor)
+}
+// Preview mode mounts two session bridges; dropping them mid-section would
+// move every later component path, which is a harness artifact, not a UI state.
+const releaseProps = () => Object.assign({ t }, previewSessionHooks())
+if (PREVIEW_DIR) dumpPreview(tree, '22-release-current')
+if (PREVIEW_DIR) {
+  clickReleaseChip()
+  tree = await settle(main.render, releaseProps())
+  dumpPreview(tree, '22b-release-current-panel')
+  byClass(tree, 'ph-release-close')[0].props.onClick()
+  tree = await settle(main.render, releaseProps())
+}
+FIXTURES['homepage/pluginRelease'] = RELEASE_NEWER_FIXTURE
+clickReleaseChip()
+tree = await settle(main.render, releaseProps())
+assert.equal(byClass(tree, 'ph-release-panel').length, 1, 'pressing the chip opens the release panel')
+const releasePanel = byClass(tree, 'ph-release-panel')[0]
+assert.ok(text(releasePanel).includes(t('release.upToDate')),
+  'the first panel draws the cached up-to-date answer, got: ' + text(releasePanel))
+byClass(tree, 'ph-release-recheck')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+assert.equal(byClass(tree, 'ph-release')[0].props['data-release-chip'], 'new', 'a newer npm release turns the chip into the new-version pill')
+assert.ok(text(byClass(tree, 'ph-release')[0]).includes('0.2.0'), 'the pill names the target version')
+const updatedPanel = byClass(tree, 'ph-release-panel')[0]
+assert.ok(text(updatedPanel).includes('0.1.9') && text(updatedPanel).includes('0.2.0'),
+  'the refreshed panel names both the running and the latest version, got: ' + text(updatedPanel))
+assert.ok(text(updatedPanel).includes(t('release.available')), 'the panel states that a new version is available')
+assert.equal(byClass(updatedPanel, 'ph-release-link').length, 2, 'the panel links the repository and the npm page')
+assert.deepEqual(
+  byClass(updatedPanel, 'ph-release-link').map((link) => link.props.href),
+  ['https://github.com/AngelosZou/dsh-homepage', 'https://www.npmjs.com/package/dsh-homepage'],
+  'the links point at the package sources',
+)
+assert.equal(byClass(updatedPanel, 'ph-release-group').length, 3, 'the panel renders every changelog group')
+assert.ok(text(updatedPanel).includes('The header checks npm once a day'),
+  'the panel renders the target version changelog, got: ' + text(updatedPanel))
+assert.equal(byClass(updatedPanel, 'ph-release-update').length, 1, 'an updatable install offers the update action')
+byClass(tree, 'ph-release')[0].props.onClick(releaseAnchor)
+tree = await settle(main.render, releaseProps())
+assert.equal(byClass(tree, 'ph-release-panel').length, 0, 'the chip closes the panel it opened')
+if (PREVIEW_DIR) dumpPreview(tree, '23-release-available')
+clickReleaseChip()
+tree = await settle(main.render, releaseProps())
+if (PREVIEW_DIR) dumpPreview(tree, '24-release-panel')
+const updateButton = byClass(tree, 'ph-release-update')[0]
+updateButton.props.onClick()
+tree = await settle(main.render, releaseProps())
+const updateCall = calls.filter((call) => call.endpoint === 'homepage/pluginUpdate').pop()
+assert.ok(updateCall, 'the update action reaches the host')
+assert.equal(updateCall.payload.args.options.version, '0.2.0', 'the update names the published version')
+assert.ok(text(byClass(tree, 'ph-release-panel')[0]).includes(t('release.doneReload')),
+  'a successful update reports that the page will reload')
+if (PREVIEW_DIR) dumpPreview(tree, '25-release-updated')
+byClass(tree, 'ph-release-close')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+// Let the update toast expire so the failure dump is about the failure.
+await sleep(3400)
+FIXTURES['homepage/pluginRelease'] = TRANSPORT_FAILURE
+clickReleaseChip()
+tree = await settle(main.render, releaseProps())
+byClass(tree, 'ph-release-recheck')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+assert.equal(byClass(tree, 'ph-release')[0].props['data-release-chip'], 'error', 'a failed check marks the chip')
+assert.ok(text(byClass(tree, 'ph-release-panel')[0]).includes(t('release.failed')),
+  'the panel says the check failed')
+assert.ok(text(byClass(tree, 'ph-release-panel')[0]).includes(t('release.staleAnswer').split('{')[0]),
+  'the panel keeps the last successful answer instead of going blank')
+if (PREVIEW_DIR) dumpPreview(tree, '26-release-error')
+byClass(tree, 'ph-release-close')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+FIXTURES['homepage/pluginRelease'] = RELEASE_CURRENT_FIXTURE
+clickReleaseChip()
+tree = await settle(main.render, releaseProps())
+byClass(tree, 'ph-release-recheck')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+assert.equal(byClass(tree, 'ph-release')[0].props['data-release-chip'], 'current', 'a restored registry turns the chip quiet again')
+byClass(tree, 'ph-release-close')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+FIXTURES['homepage/pluginRelease'] = RELEASE_LOCAL_FIXTURE
+clickReleaseChip()
+tree = await settle(main.render, releaseProps())
+byClass(tree, 'ph-release-recheck')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+assert.equal(byClass(tree, 'ph-release')[0].props['data-release-chip'], 'new', 'a local link still sees the newer release')
+assert.ok(text(byClass(tree, 'ph-release-panel')[0]).includes(t('release.notUpdatable.local')),
+  'a local link install says why it cannot update in place')
+assert.equal(byClass(tree, 'ph-release-update')[0].props.disabled, true,
+  'a local link install disables the update action instead of failing it')
+if (PREVIEW_DIR) dumpPreview(tree, '27-release-local')
+byClass(tree, 'ph-release-close')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+FIXTURES['homepage/pluginRelease'] = RELEASE_CURRENT_FIXTURE
+FIXTURES['homepage/pluginUpdate'] = { ok: true, code: 'ok', from: '0.1.9', to: '0.2.0', step: 'install', application: 'applied', restartRequired: false, error: null, warnings: [] }
+clickReleaseChip()
+tree = await settle(main.render, releaseProps())
+byClass(tree, 'ph-release-recheck')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
+assert.equal(byClass(tree, 'ph-release')[0].props['data-release-chip'], 'current', 'the header returns to the quiet state for the remaining renders')
+byClass(tree, 'ph-release-close')[0].props.onClick()
+tree = await settle(main.render, releaseProps())
 
 // The Sessions card's expanded page, only in preview mode: the wall dump above
 // already carries its three readings, but the list and the stop control need the
