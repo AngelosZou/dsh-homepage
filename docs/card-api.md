@@ -77,6 +77,7 @@ including a built-in one — requires `override: true`, otherwise it throws.
 | `hover` | `{grow, content, disabled}` | `{grow: 1.045}` | Hover growth factor, hover-only content and an opt-out. |
 | `actions` | action[] | `[]` | Controls shown in the preview. |
 | `detailActions` | action[] | `[]` | Controls shown only in the expanded page. |
+| `fontSizes` | `{ [key]: { label?, default, min?, max? } }` | `{}` | Named text sizes the user may tune per card (see Type sizes). |
 | `effects` | `{outline, ripple, sheen, float, spotlight}` | all off | Animation defaults (see Effects). |
 | `refreshMs` | number | `0` | Refresh hint for polling bodies; the card still owns its timer. |
 | `expandable` / `draggable` / `resizable` | boolean | `true` | Turn that interaction off. |
@@ -93,6 +94,8 @@ including a built-in one — requires `override: true`, otherwise it throws.
 | --- | --- |
 | `id` / `def` | Card id and the normalized definition. |
 | `controls` / `control(id)` / `setControl(id, value)` | Current control values; writing a value fires that action's `onChange`. |
+| `fontSize(id, base?)` / `fontScale(id)` / `setFontSize(id, value)` | A registered type item's CSS `font-size` (optionally with a per-call base), the user's multiplier for it (`1` when untuned), and a programmatic write. |
+| `typeScale` | The global text scale currently in force (`1` by default). |
 | `notify(level, text)` / `announce(level, text)` / `retract()` | Adds a notice; sets or retracts the single live notice. `level` is `info`, `warn` or `error`. |
 | `clearNotifications()` / `toast(text)` | Clears this card's notices; one-shot corner toast. |
 | `expand()` / `collapse()` | Opens or closes this card's expanded page. |
@@ -123,6 +126,68 @@ jitter (about ±10%) so cards mounted together do not keep refreshing together, 
 Common fields: `id` (required), `label`, `icon`, `tooltip`, `value`, `onChange(value, api)`.
 The initial value is `action.value`, else the first option; a `switch` defaults to `false`.
 Values persist per card in `home-state.json`.
+
+## Type sizes
+
+Card text has two layers of adjustment, and they multiply:
+
+- **The global scale** is one multiplier for the whole wall, chosen in **Customize → Text
+  size** (`Compact`, `Standard`, `Large`, `Largest`). It sits above the card editor and
+  affects every card. The panel publishes it as `--ph-type-scale`, and the framework's
+  card primitives read it, so framework text and shipped cards follow it without any card
+  code. A card that writes its own CSS can use
+  `calc(<size> * var(--ph-type-scale,1))` to join in.
+- **Registered items** are the parts of one card the user may tune separately. They are
+  listed under **This card's text** in the same studio, affect only the selected card,
+  and a card with at least one item carries an `Aa` mark in the card list. Declare them on
+  the definition and resolve them with `api.fontSize(id, base?)`:
+
+```js
+defineCard({
+  id: 'my-card',
+  fontSizes: {
+    metric: { label: 'Primary reading', default: '17px' },
+    caption: { label: 'Caption', default: '11px', min: 0.8, max: 2 },
+  },
+  content: (api) => React.createElement('div', null,
+    React.createElement('strong', { style: { fontSize: api.fontSize('metric') } }, '42'),
+    React.createElement('span', { style: { fontSize: api.fontSize('caption') } }, 'captions')),
+})
+```
+
+A card whose sizes live in its own stylesheet omits `default` and reads the multiplier as
+a CSS variable instead. The framework writes `--ph-item-<id>` on the card surface (and on
+the expanded pane), and the variable holds the item multiplier only, so it multiplies
+with the global scale:
+
+```js
+defineCard({
+  id: 'my-card',
+  fontSizes: { metric: { label: 'Primary reading' } },
+})
+// in the card's CSS:
+// .my-reading{font-size:calc(30px * var(--ph-type-scale,1) * var(--ph-item-metric,1))}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `label` | string \| `() => string` | Name shown in the studio; defaults to the key. |
+| `default` / `base` | number \| length | Optional. A number is px; `px`, `rem`, `em`, `%` and `pt` are accepted. Omit it for a CSS-variable item. |
+| `min` / `max` | number | Multiplier bounds, `0.5`..`3`; they default to `0.6` and `2.5`. |
+
+`api.fontSize(id)` returns the declared base multiplied by the global scale and the user's
+item multiplier, as a CSS value: `'17px'` at 100% and `'calc(17px * 1.265)'` once either
+layer moves. The optional second argument supplies a base for one call, so one role can
+cover elements of different sizes: `api.fontSize('metric', '26px')`. It returns `null`
+when an item has no declared base and no base is passed. `api.fontScale(id)` reports the
+item's own multiplier, and `api.setFontSize(id, value)` writes it programmatically;
+passing `1` restores the card's default.
+
+The framework stores item multipliers per card in `home-state.json` under `type`:
+`{ "sessions": { "metric": 1.1 } }`. Writing `1` removes the entry. Because the two
+layers multiply, raising the global scale later still moves an item the user tuned
+earlier. The shipped Device card uses the base form; Sessions, Projects, Token and Tool
+usage use the CSS-variable form.
 
 ## Effects
 
@@ -219,7 +284,7 @@ One directory: `<DSH_HOME>/storages/dsh-homepage/` (`DSH_HOME` defaults to `~/.d
 
 | File | Contents |
 | --- | --- |
-| `home-state.json` | Card order, sizes, backgrounds, artwork overrides, effects, control values, UI settings. |
+| `home-state.json` | Card order, sizes, backgrounds, artwork overrides, effects, control values, UI settings (including the global text scale under `settings.typeScale`) and per-card type-item multipliers under `type`. |
 | `balance-ledger.json` | Daily balance samples (180 days). |
 | `sidebar-layout.json` | Sidebar groups and workspace membership (`version: 1`). |
 | `tool-usage.json` | Incremental per-session tool index. |

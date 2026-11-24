@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.12] — 2026-11-24
+
+### Added
+- Customize global font size and card defined font size.
+
 ## [0.1.11] — 2026-11-23
 
 ### Fixed

@@ -531,6 +531,25 @@ equal(resetAppearance.hidden.length, 0, 'empty hidden list restores all cards')
 equal(resetAppearance.layout.token.w, 2, 'legacy layout survives new section patches')
 equal(resetAppearance.version, 1, 'new fields retain state version compatibility')
 
+// Font-size items are their own v1 section: one multiplier per card item, each
+// bounded to the range the client applies, and only safe keys survive.
+const typed = await api.saveState({
+  type: JSON.parse('{"device":{"metric":1.4,"caption":2,"slow":"1.2","huge":99,"tiny":-99},"__proto__":{"metric":2},"bad":"nope"}'),
+})
+equal(typed.type.device.metric, 1.4, 'a type multiplier is persisted')
+equal(typed.type.device.caption, 2, 'every item is persisted')
+equal(typed.type.device.huge, 3, 'a type multiplier clamps to the client range')
+equal(typed.type.device.tiny, 0.5, 'a too-small multiplier clamps to the client range')
+assert(!('slow' in typed.type.device), 'a non-numeric multiplier is dropped')
+assert(!Object.hasOwn(typed.type, '__proto__') && !Object.hasOwn(typed.type, 'bad'),
+  'prototype keys and non-map cards are excluded')
+const typedIgnored = await api.saveState({ order: ['token'], type: [] })
+equal(typedIgnored.type.device.metric, 1.4, 'a wrong section type leaves the saved multipliers alone')
+equal(JSON.stringify((await api.state()).type), JSON.stringify(typed.type), 'type multipliers are read back from disk')
+assert('type' in typed, 'a fresh state record carries the type section')
+const resetTyped = await api.saveState({ type: {} })
+equal(Object.keys(resetTyped.type).length, 0, 'an empty map clears the multipliers')
+
 // ------------------------------------------------------------------ tool
 
 const all = await tool.execute({ section: 'all' })

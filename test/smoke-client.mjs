@@ -5850,6 +5850,102 @@ tree = await settle(main.render, { t })
 assert.equal(byClass(tree, 'ph-studio').length, 0, 'studio closes without changing the wall')
 assert.ok(selectedTitle)
 
+// ---------------------------------------------------------------- text size
+// Two layers share one mechanism: a global multiplier every card follows, and
+// a card's own registered font-size items multiplied by it.
+assert.ok(/\.ph-stat-value\{font-size:calc\(17px \* var\(--ph-type-scale,1\)\)/.test(module_.STYLES),
+  'card text reads the global type scale from the stylesheet')
+const deviceManifest = api.manifest('device')
+assert.deepEqual(deviceManifest.fontSizes.map((item) => item.id), ['metric', 'caption'],
+  'the device card exposes its readings and captions as type items')
+assert.equal(deviceManifest.fontSizes[0].default, '12.5px', 'a type item carries its base size')
+assert.equal(api.cardApi('device').fontSize('metric'), '12.5px', 'an untouched item resolves to its base size')
+assert.equal(api.cardApi('device').fontSize('nope'), null, 'an unknown item resolves to null')
+assert.equal(api.cardApi('device').typeScale, 1, 'the global scale starts at 1')
+const normalizedSizes = module_._internal.normalizeFontSizes(JSON.parse(
+  '{"ok":{"default":14},"bad":{"default":"1px;display:none"},"__proto__":{"default":12},"role":{}}'))
+assert.deepEqual(normalizedSizes.map((item) => item.id), ['ok', 'role'],
+  'invalid and prototype-named type items are dropped; a base-less role is kept')
+assert.equal(normalizedSizes[0].base, '14px', 'a numeric base becomes pixels')
+assert.equal(normalizedSizes[1].base, null, 'a role without a default keeps no base')
+
+byClass(tree, 'ph-customize-trigger')[0].props.onClick()
+tree = await settle(main.render, { t })
+const scaleButtons = byClass(tree, 'ph-type-scale-option')
+assert.equal(scaleButtons.length, module_._internal.TYPE_SCALES.length, 'the studio offers every global preset')
+// The global picker is a band of its own, not a row inside the selected card.
+assert.equal(byClass(tree, 'ph-studio-global-type').length, 1, 'the global picker has its own section')
+assert.equal(byClass(byClass(tree, 'ph-studio-editor')[0], 'ph-type-scale-option').length, 0,
+  'no global scale control lives inside the card editor')
+assert.ok(text(byClass(tree, 'ph-studio-global-type')[0]).includes(t('studio.type.scope')),
+  'the band names its scope as global')
+assert.equal(byClass(tree, 'ph-panel')[0].props.style['--ph-type-scale'], '1',
+  'the panel publishes the global scale as a custom property')
+scaleButtons[2].props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(api.state().settings.typeScale, 1.15, 'choosing a preset stores its multiplier')
+assert.equal(byClass(tree, 'ph-panel')[0].props.style['--ph-type-scale'], '1.15',
+  'the custom property follows the stored scale')
+assert.equal(api.cardApi('device').fontSize('metric'), 'calc(12.5px * 1.15)',
+  'the global scale multiplies the item base')
+
+byClass(tree, 'ph-studio-card-select').find(node => text(node) === t('card.device.title')).props.onClick()
+tree = await settle(main.render, { t })
+const typeRows = byClass(tree, 'ph-type-item')
+assert.equal(typeRows.length, 2, 'the selected card lists its registered type items')
+const metricRow = () => byClass(tree, 'ph-type-item').find(node => text(node).includes(t('device.font.metric')))
+elements(metricRow()).find(node => node.tag === 'button' && text(node) === '+').props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(api.state().type.device.metric, 1.1, 'the per-item stepper stores its multiplier')
+assert.equal(api.cardApi('device').fontSize('metric'), 'calc(12.5px * 1.265)', 'the two scales multiply')
+const deviceTypeCell = byClass(tree, 'ph-cell').find(cell => cell.props['data-card-cell'] === 'device')
+assert.equal(byClass(deviceTypeCell, 'ph-meter-value')[0].props.style.fontSize, 'calc(12.5px * 1.265)',
+  'the card paints the item at the composed size')
+await sleep(400)
+const typeSave = calls.filter(call => call.endpoint === 'homepage/saveState').pop()
+assert.equal(typeSave.payload.args.patch.type.device.metric, 1.1, 'item multipliers travel through the save endpoint')
+assert.equal(typeSave.payload.args.patch.settings.typeScale, 1.15, 'the global scale travels through the save endpoint')
+
+elements(metricRow()).find(node => node.tag === 'button' && text(node) === t('studio.reset')).props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(api.state().type.device, undefined, 'resetting the only item removes the card record')
+assert.equal(api.cardApi('device').fontSize('metric'), 'calc(12.5px * 1.15)', 'the item falls back to the global scale')
+byClass(tree, 'ph-type-scale-option')[1].props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(api.state().settings.typeScale, undefined, 'choosing standard removes the override')
+assert.equal(api.cardApi('device').fontSize('metric'), '12.5px', 'the default scale resolves to the base size')
+// The list tells the user which cards have per-card type items.
+const deviceStudioRow = byClass(tree, 'ph-studio-card-row').find(row => text(row).includes(t('card.device.title')))
+assert.equal(byClass(deviceStudioRow, 'ph-studio-type-badge').length, 1, 'a card with items is marked in the list')
+const auditStudioRow = byClass(tree, 'ph-studio-card-row').find(row => text(row).includes(t('card.pluginAudit.title')))
+assert.equal(byClass(auditStudioRow, 'ph-studio-type-badge').length, 0, 'a card without items carries no mark')
+
+// A role whose sizes live in the card's own CSS: no default, one multiplier.
+byClass(tree, 'ph-studio-card-select').find(node => text(node) === t('session.title')).props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(byClass(tree, 'ph-type-item').length, 1, 'the sessions card exposes one adjustable reading')
+assert.equal(api.cardApi('sessions').fontSize('metric'), null, 'a base-less role has no size on its own')
+assert.equal(api.cardApi('sessions').fontSize('metric', '30px'), '30px', 'a per-call base supplies the size')
+elements(byClass(tree, 'ph-type-item')[0]).find(node => node.tag === 'button' && text(node) === '+').props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(api.state().type.sessions.metric, 1.1, 'the sessions reading stores its multiplier')
+assert.equal(api.cardApi('sessions').fontSize('metric', '30px'), 'calc(30px * 1.1)', 'the call base and item scale compose')
+const sessionsTypeCell = byClass(tree, 'ph-cell').find(cell => cell.props['data-card-cell'] === 'sessions')
+assert.equal(byClass(sessionsTypeCell, 'ph-shell')[0].props.style['--ph-item-metric'], '1.1',
+  'the card surface publishes the item multiplier for its own CSS')
+const injectedCss = elements(tree).filter(node => node.tag === 'style').map(node => String(node.props.children || '')).join('\n')
+assert.ok(/\.ph-ss-big\{font-size:calc\(30px \* var\(--ph-type-scale,1\) \* var\(--ph-item-metric,1\)\)/.test(injectedCss),
+  'a base-less card reads the item variable in its own stylesheet')
+elements(byClass(tree, 'ph-type-item')[0]).find(node => node.tag === 'button' && text(node) === t('studio.reset')).props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(api.state().type.sessions, undefined, 'resetting the role removes the card record')
+const sessionsTypeCellAfter = byClass(tree, 'ph-cell').find(cell => cell.props['data-card-cell'] === 'sessions')
+assert.equal(byClass(sessionsTypeCellAfter, 'ph-shell')[0].props.style['--ph-item-metric'], undefined,
+  'an untouched item stops publishing the property')
+byClass(tree, 'ph-studio-icon-button')[0].props.onClick()
+tree = await settle(main.render, { t })
+assert.equal(byClass(tree, 'ph-studio').length, 0, 'the type controls close with the studio')
+
 // --- the DSH card when the upstream cannot be read --------------------------
 // "读不到" must not be the whole message: the card has to say that the network
 // failed, and "无" must not be used for a root it never identified. This is the

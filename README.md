@@ -39,7 +39,7 @@ complete the installation.
 
 Eleven cards ship: the preview shows the readings, expanding opens the full view. Click a
 card to float it over the wall, drag its title to reorder, and use **Customize** for
-artwork, visibility and motion.
+artwork, visibility, motion and text size.
 
 | Card | What it does |
 | --- | --- |
