@@ -16,6 +16,7 @@ import { readFile } from 'node:fs/promises'
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cardFiles, compose, normalizeEol, readSources } from '../scripts/build-client.mjs'
+import { DEFAULT_SCHEME } from '../lib/default-state.js'
 import { createUiPrimitives } from './ui-primitives-stub.mjs'
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -1804,6 +1805,26 @@ assert.deepEqual(
   ['token', 'sessions', 'projects', 'network', 'plugin-audit', 'device', 'hygiene', 'tool-usage', 'dsh', 'sidebar-groups', 'skill'],
   'the wall order must follow each card\'s own order',
 )
+
+// The shipped default wall is what a fresh profile paints and what the README
+// screenshot shows, so every seeded span has to be a span the size controls can
+// reproduce. A seed outside the card's own minSize/maxSize is a wall the user
+// can never get back to after one edit: the stepper renders the value but
+// cannot produce it (v0.1.12 shipped the device card at 2x1 while its minSize
+// said 2x2, which is exactly that trap).
+for (const [id, span] of Object.entries(DEFAULT_SCHEME.layout)) {
+  const seeded = surface.get(id)
+  assert.ok(seeded, 'the default wall must only name cards that ship: ' + id)
+  for (const axis of ['w', 'h']) {
+    if (span[axis] === undefined) continue
+    assert.ok(Number.isInteger(span[axis]), 'a seeded span must be a whole grid cell: ' + id + '.' + axis)
+    assert.ok(
+      span[axis] >= seeded.minSize[axis] && span[axis] <= seeded.maxSize[axis],
+      'the default wall must be reachable from the size controls: ' + id + '.' + axis + ' = ' + span[axis]
+        + ' is outside ' + seeded.minSize[axis] + '..' + seeded.maxSize[axis],
+    )
+  }
+}
 
 const visitor = surface.plugin('other-plugin')
 assert.equal(visitor.name, 'other-plugin', 'a handle carries the name it was opened with')

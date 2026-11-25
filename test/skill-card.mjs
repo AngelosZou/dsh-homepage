@@ -720,6 +720,9 @@ ok(card, 'the shipped registry must hold the skill card')
 ok(api, 'the card must expose its api')
 is(card.id, 'skill', 'the card id must be the one the contract names')
 is(card.shipped, true, 'the skill card ships with the plugin')
+same(card.minSize, { w: 1, h: 1 },
+  'the default wall ships a 1x1 tile, so the size stepper must offer it')
+same(card.maxSize, { w: 4, h: 3 }, 'the expanded page may grow, the wall span stops at four by three')
 is(card.subtitle, null,
   'the card registers no subtitle: the wall tile and the expanded pane header already name it')
 

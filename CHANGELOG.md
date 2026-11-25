@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.13] — 2026-11-25
+
+### Fixed
+- Default card minimal height set to 1.
+
 ## [0.1.12] — 2026-11-24
 
 ### Added
