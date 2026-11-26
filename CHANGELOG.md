@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.14] — 2026-11-26
+
+### Fixed
+- Sidebar keeps scrolling in the same wheel gesture after the shell's navigation has scrolled away.
+
 ## [0.1.13] — 2026-11-25
 
 ### Fixed

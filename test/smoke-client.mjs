@@ -2377,6 +2377,39 @@ assert.equal(regionRoot.props['data-sidebar-mode'], 'grouped', 'the region repor
 assert.equal(byClass(regionTree, 'ph-sb-wide').length, 1, 'the header draws its wide shape')
 assert.equal(byClass(regionTree, 'ph-sb-rail').length, 1, 'and its rail, which the container query chooses between')
 
+const boundNodes = []
+const SECTION_SCROLLER = { bindScrollerRef: (node) => boundNodes.push(node) }
+const boundTree = await settle(region, { section: SECTION_SCROLLER })
+const boundList = byClass(boundTree, 'ph-sb-list')[0]
+assert.ok(boundList, 'a bound region still draws its list')
+assert.equal(
+  boundList.props.ref,
+  SECTION_SCROLLER.bindScrollerRef,
+  'the list itself — the element that scrolls — is what the shell hand-off binds',
+)
+assert.ok(
+  hasClass(byClass(boundTree, 'ph-sb')[0], 'is-bound'),
+  'the region reports that the shell owns its wheel hand-off',
+)
+const plainTree = await settle(region, {})
+assert.equal(
+  byClass(plainTree, 'ph-sb-list')[0].props.ref,
+  undefined,
+  'a shell without the hand-off leaves the list unbound',
+)
+assert.ok(
+  !hasClass(byClass(plainTree, 'ph-sb')[0], 'is-bound'),
+  'and the region says so',
+)
+
+let sectionHookCalls = 0
+const slotElement = elements(await settle(occupant.render, {
+  useSectionScroller: () => { sectionHookCalls += 1; return SECTION_SCROLLER },
+})).find((node) => node.tag === 'homepage-sidebar')
+assert.ok(slotElement, 'the occupant renders the region element, not the region component')
+assert.ok(sectionHookCalls >= 1, 'the occupant calls the shell\'s viewport hand-off hook')
+assert.equal(typeof slotElement.props.ref, 'object', 'the element carries the mount ref the region binds through')
+
 const sections = sbNodes(regionTree, 'section')
 assert.deepEqual(
   sections.map((node) => node.props['data-group']),
@@ -3096,9 +3129,9 @@ assert.ok(
 )
 assert.ok(
   sheet.includes('@container (height > 0px){.ph-sb-list{overscroll-behavior:auto}}')
-    && sheet.includes('@container scroll-state(scrollable: bottom){.ph-sb-list{overflow-y:hidden}}')
+    && sheet.includes('@container scroll-state(scrollable: bottom){.ph-sb:not(.is-bound) .ph-sb-list{overflow-y:hidden}}')
     && /\.ph-sb-list\{[^}]*overscroll-behavior:contain/.test(sheet),
-  'the new shell hands off scrolling; the legacy shell keeps its original containment',
+  'the native gate applies only while no hand-off is bound; the legacy shell keeps its original containment',
 )
 // Every box between the element and the scrolling list has to pass the height on.
 for (const link of [
